@@ -1,0 +1,176 @@
+{
+  "name": "git-branch-manager-pro",
+  "displayName": "Git Branch Manager - Clean & Organize",
+  "description": "Clean up old and merged Git branches with one click. Dashboard view, bulk delete, branch templates.",
+  "version": "1.2.10",
+  "publisher": "yonasvalentinmougaardkristensen",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": ["SCM Providers", "Other"],
+  "keywords": [
+    "git",
+    "branch",
+    "clean",
+    "cleanup",
+    "delete",
+    "manager",
+    "organize",
+    "prune",
+    "merged",
+    "git branch",
+    "branch manager",
+    "delete branches",
+    "clean branches",
+    "git cleanup",
+    "branch cleanup",
+    "remove branches",
+    "git tools",
+    "git utilities",
+    "branch delete",
+    "git prune",
+    "stale branches",
+    "old branches",
+    "branch remover",
+    "git workflow",
+    "branch organizer",
+    "git manager",
+    "repository cleanup",
+    "repo cleaner",
+    "git helper",
+    "productivity",
+    "git housekeeping",
+    "branch hygiene",
+    "git maintenance"
+  ],
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1a1a1a",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yonasvalentin/git-branch-manager-pro"
+  },
+  "bugs": {
+    "url": "https://github.com/yonasvalentin/git-branch-manager-pro/issues"
+  },
+  "homepage": "https://github.com/yonasvalentin/git-branch-manager-pro#readme",
+  "license": "MIT",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "git-branch-manager.cleanup",
+        "title": "Git Branch Manager: Show Branch Cleaner",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "git-branch-manager.quickCleanup",
+        "title": "Git Branch Manager: Quick Clean Merged Branches"
+      },
+      {
+        "command": "git-branch-manager.createBranch",
+        "title": "Git Branch Manager: Create Branch from Template",
+        "icon": "$(add)"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "git-branch-manager.createBranch",
+          "group": "navigation@1",
+          "when": "scmProvider == git"
+        },
+        {
+          "command": "git-branch-manager.cleanup",
+          "group": "navigation@2",
+          "when": "scmProvider == git"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "git-branch-manager.cleanup",
+          "when": "gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "git-branch-manager.quickCleanup",
+          "when": "gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "git-branch-manager.createBranch",
+          "when": "gitOpenRepositoryCount != 0"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Git Branch Manager",
+      "properties": {
+        "gitBranchManager.showNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notifications when branches need cleanup"
+        },
+        "gitBranchManager.daysUntilStale": {
+          "type": "number",
+          "default": 30,
+          "minimum": 7,
+          "maximum": 365,
+          "description": "Number of days before a branch is considered stale"
+        },
+        "gitBranchManager.protectedBranches": {
+          "type": "array",
+          "default": ["main", "master", "develop", "dev", "staging", "production"],
+          "description": "Branches that should never be deleted"
+        },
+        "gitBranchManager.confirmBeforeDelete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask for confirmation before deleting branches"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "git-branch-manager.cleanup",
+        "key": "ctrl+shift+g ctrl+shift+c",
+        "mac": "cmd+shift+g cmd+shift+c"
+      },
+      {
+        "command": "git-branch-manager.createBranch",
+        "key": "ctrl+shift+g ctrl+shift+n",
+        "mac": "cmd+shift+g cmd+shift+n"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "16.x",
+    "@typescript-eslint/eslint-plugin": "^8.31.1",
+    "@typescript-eslint/parser": "^8.31.1",
+    "eslint": "^9.25.1",
+    "esbuild": "^0.25.3",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^4.9.4",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}

@@ -1,0 +1,158 @@
+# Change Log
+
+All notable changes to the "Git Branch Manager" extension will be documented in this file.
+
+## [1.2.10] - 2025-01-13
+
+### Fixed
+- Status bar branch count was slow to update after operations
+- Status bar now updates immediately after all branch operations
+- Added immediate updates for: delete, bulk delete, create branch, refresh
+- Reduced background update interval from 60 to 30 seconds
+- Created global status bar reference for instant updates
+
+## [1.2.9] - 2025-01-13
+
+### Fixed
+- UI not updating after branch deletion or other operations
+- Added proper return value to deleteBranch function to track success
+- Generate new nonce for each webview refresh to ensure proper re-rendering
+- Only refresh UI when operations actually succeed (not on cancel)
+- Added visual feedback on refresh button
+- Improved refresh mechanism for all operations (delete, switch, bulk delete)
+- All UI updates now work reliably after any branch operation
+
+## [1.2.8] - 2025-01-13
+
+### Fixed
+- Buttons were not responding to clicks due to DOMContentLoaded event timing issues
+- Replaced DOMContentLoaded with proper DOM readiness check
+- Removed debug code from production
+- Improved event listener attachment reliability using `currentTarget` instead of `this`
+- Wrapped script in IIFE to avoid global scope pollution
+- Enhanced user experience by moving confirmations to VS Code native dialogs
+- Added configurable confirmation dialogs via `gitBranchManager.confirmBeforeDelete` setting
+- All buttons now work reliably: Delete, Switch, Create Branch, Quick Clean, etc.
+
+## [1.2.7] - 2024-01-11
+
+### Fixed
+- Functions were defined after DOMContentLoaded, causing reference errors
+- Moved all function definitions before the event listener setup
+- Removed duplicate function definitions that were causing conflicts
+- Added comprehensive error handling and console logging for debugging
+- All buttons now work correctly
+
+## [1.2.6] - 2024-01-11
+
+### Fixed
+- Inline scripts were being silently blocked by VS Code's default CSP
+- Implemented proper nonce-based Content Security Policy
+- Added getNonce() function to generate secure random nonces
+- Updated CSP meta tag to allow only scripts with the correct nonce
+- All JavaScript now executes properly with secure CSP compliance
+
+## [1.2.5] - 2024-01-11
+
+### Fixed
+- Removed all inline onclick handlers that were blocked by CSP
+- Replaced with proper event listeners using addEventListener
+- Fixed all buttons: Delete, Delete All, Delete Selected, Quick Clean, Refresh, Create Branch, Switch
+- Fixed all checkboxes: Select All for merged/old/active branches
+- Fixed all links: Support, Review, Report Issues
+- Every interactive element now uses proper event delegation
+
+## [1.2.4] - 2024-01-11
+
+### Fixed
+- Delete buttons not working due to Content Security Policy blocking inline event handlers
+- Added proper CSP headers to allow inline scripts in webview
+- Fixed nested branch-actions div in Active Branches section
+- All delete, switch, and bulk operations now work correctly
+
+## [1.2.3] - 2024-01-11
+
+### Fixed
+- "NaN years ago" date display issue for merged branches
+- Fixed git log command that was failing to get commit dates
+- Added proper error handling for date parsing
+- Ensured delete functionality works correctly
+
+## [1.2.2] - 2024-01-11
+
+### Fixed
+- Delete buttons not working in the branch manager webview
+- Quick Clean merged branches button not functioning
+- Refresh button appearing to do nothing
+- Branch names with special characters broke the delete functionality
+- Added proper HTML escaping and decoding for branch names in the UI
+
+## [1.2.1] - 2024-01-11
+
+### Fixed
+- Fixed git checkout command syntax error when creating branches from templates
+- Improved handling of new repositories without any Git initialization
+- Added helpful prompts when trying to use the extension in repositories without commits
+- Better error messages to guide users through initial repository setup
+- Enhanced user experience for brand new projects
+- Clear instructions for initializing Git repositories
+
+## [1.2.0] - 2024-01-11
+
+### Added
+- Smart review request system that appears after successful cleanups
+- Review prompts show after 5 successful cleanups or 20 branches deleted
+- "Leave a Review" link in the webview footer
+- Tracks branch deletion statistics for better engagement
+
+### Improved
+- Updated icon for better quality
+- Review requests are timed after user experiences value
+- Non-intrusive review prompts with "Don't Ask Again" option
+
+## [1.1.2] - 2024-01-11
+
+### Improved
+- Updated icon to 256x256px with transparent background for better quality
+- Optimized keywords for better marketplace discoverability
+- Enhanced description for improved search ranking
+
+## [1.1.1] - 2024-01-11
+
+### Added
+- Extension icon for better visibility in VS Code Marketplace
+
+## [1.1.0] - 2024-01-11
+
+### Security
+- Fixed command injection vulnerability by properly escaping branch names in Git commands
+- All branch names are now safely quoted to prevent malicious code execution
+
+### Fixed
+- Memory leak from interval timers that were never cleaned up
+- Incorrect merge detection - now uses `git branch --merged` for accurate results
+- Hardcoded stale days (30) - now properly uses user configuration setting
+- Protected branches (main, master, etc.) are now excluded from cleanup suggestions
+
+### Added
+- Support message to help fund continued development
+- Buy Me a Coffee links in README and webview footer
+- Protected branches are shown in the UI with configuration hint
+- Dynamic stale days display based on user settings
+
+### Improved
+- Better error handling for Git commands
+- More accurate branch merge detection
+- Improved configuration usage throughout the extension
+- Added usage tracking to understand feature adoption
+
+## [1.0.0] - 2024-01-11
+
+### Initial Release
+- Branch management dashboard
+- Quick cleanup command for merged branches
+- Branch creation from templates
+- Status bar integration showing branches to clean
+- Bulk selection and deletion
+- Smart notifications
+- Customizable settings
