@@ -2,6 +2,28 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [1.3.0] - 2025-01-30
+
+### Added
+- **Branch Health Scoring**: Every branch now gets a health score (0-100) based on merge status, age, remote tracking, and commits behind
+- **Remote Branch Management**: New "Remote" tab to view and clean merged remote branches, prune stale references
+- **Git Worktree Integration**: New "Worktrees" tab to create, manage, lock/unlock, and remove worktrees
+- **Stash Management**: New "Stashes" tab to create, apply, pop, drop, and clear stashes
+- **Orphaned Branch Detection**: Identifies local branches whose remote tracking branch has been deleted
+- **Tabbed UI**: Organized interface with Local, Remote, Worktrees, and Stashes tabs
+- New commands:
+  - `Git Branch Manager: Clean Remote Branches`
+  - `Git Branch Manager: Manage Worktrees`
+  - `Git Branch Manager: Create Worktree`
+  - `Git Branch Manager: Quick Stash`
+  - `Git Branch Manager: Pop Latest Stash`
+
+### Improved
+- Health indicators show color-coded status for each branch
+- Issue number extraction from branch names (shows linked issues)
+- Enhanced branch metadata display (author, ahead/behind counts)
+- Professional VS Code-native UI styling
+
 ## [1.2.10] - 2025-01-13
 
 ### Fixed
