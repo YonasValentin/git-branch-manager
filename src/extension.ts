@@ -96,6 +96,26 @@ interface BranchTemplate {
   example: string;
 }
 
+/**
+ * Search and filter state for the branch manager UI.
+ */
+interface SearchFilterState {
+  query: string;
+  statusFilters: Set<'merged' | 'stale' | 'orphaned' | 'active'>;
+  healthFilters: Set<'healthy' | 'warning' | 'critical' | 'danger'>;
+  sortField: 'name' | 'age' | 'health' | 'author';
+  sortDirection: 'asc' | 'desc';
+}
+
+/**
+ * Result of fuzzy matching with highlight information.
+ */
+interface FuzzyMatchResult {
+  score: number;
+  matchIndices: number[];
+  text: string;
+}
+
 const BRANCH_TEMPLATES: BranchTemplate[] = [
   { name: 'Feature', pattern: 'feature/{description}', example: 'feature/add-user-auth' },
   { name: 'Bugfix', pattern: 'bugfix/{description}', example: 'bugfix/fix-login-error' },
@@ -1642,6 +1662,31 @@ function getWebviewContent(
         .stash-files { padding: 8px 12px 12px 24px; border-top: 1px solid var(--vscode-panel-border); }
         .stash-file { font-family: var(--vscode-editor-font-family); font-size: 12px; padding: 2px 0; opacity: 0.8; }
         .stash-file::before { content: ''; display: inline-block; width: 12px; height: 12px; margin-right: 6px; background: var(--vscode-symbolIcon-fileForeground); mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M13 4H8.41L6 1.59A2 2 0 005.17 1H3a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V6a2 2 0 00-2-2z'/%3E%3C/svg%3E") center/contain no-repeat; vertical-align: middle; }
+        .search-container { margin-bottom: 12px; }
+        .search-input-wrapper { position: relative; display: flex; align-items: center; }
+        .search-input { width: 100%; padding: 6px 30px 6px 28px; background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); color: var(--vscode-input-foreground); border-radius: 4px; font-size: 13px; outline: none; }
+        .search-input:focus { border-color: var(--vscode-focusBorder); }
+        .search-input::placeholder { color: var(--vscode-input-placeholderForeground); }
+        .search-icon { position: absolute; left: 8px; opacity: 0.6; pointer-events: none; }
+        .search-clear { position: absolute; right: 6px; background: none; border: none; color: var(--vscode-foreground); opacity: 0.6; cursor: pointer; padding: 2px 4px; display: none; }
+        .search-clear:hover { opacity: 1; }
+        .search-input:not(:placeholder-shown) + .search-icon + .search-clear { display: block; }
+        .filter-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+        .filter-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+        .filter-chip { padding: 3px 10px; border-radius: 12px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 1px solid transparent; font-size: 11px; cursor: pointer; transition: all 0.15s; }
+        .filter-chip:hover { background: var(--vscode-button-secondaryHoverBackground); }
+        .filter-chip[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-focusBorder); }
+        .filter-chip.merged[aria-pressed="true"] { background: var(--vscode-editorWarning-foreground); color: var(--vscode-editor-background); }
+        .filter-chip.stale[aria-pressed="true"] { background: var(--vscode-editorInfo-foreground); color: var(--vscode-editor-background); }
+        .filter-chip.orphaned[aria-pressed="true"] { background: var(--vscode-editorError-foreground); color: var(--vscode-editor-background); }
+        .filter-chip.active[aria-pressed="true"] { background: var(--vscode-testing-iconPassed); color: var(--vscode-editor-background); }
+        .sort-dropdown { padding: 3px 8px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border, transparent); border-radius: 4px; font-size: 11px; cursor: pointer; margin-left: auto; }
+        .sort-dropdown:focus { border-color: var(--vscode-focusBorder); outline: none; }
+        .result-count { font-size: 11px; opacity: 0.6; margin-left: 8px; }
+        .no-results { padding: 24px; text-align: center; opacity: 0.6; }
+        .no-results-icon { font-size: 32px; margin-bottom: 8px; }
+        .highlight { background: var(--vscode-editor-findMatchHighlightBackground); border-radius: 2px; }
+        .branch-item.hidden { display: none; }
     </style>
 </head>
 <body>
@@ -1661,6 +1706,36 @@ function getWebviewContent(
     </div>
 
     <div id="local" class="tab-content active">
+        <div class="search-container">
+            <div class="search-input-wrapper">
+                <input type="text" class="search-input" id="branch-search" placeholder="Search branches..." aria-label="Search branches">
+                <span class="search-icon">⌕</span>
+                <button class="search-clear" id="search-clear" aria-label="Clear search">✕</button>
+            </div>
+            <div class="filter-bar">
+                <div class="filter-chips">
+                    <button class="filter-chip merged" data-filter="merged" aria-pressed="false">Merged (${merged.length})</button>
+                    <button class="filter-chip stale" data-filter="stale" aria-pressed="false">Stale (${stale.length})</button>
+                    <button class="filter-chip orphaned" data-filter="orphaned" aria-pressed="false">Orphaned (${orphaned.length})</button>
+                    <button class="filter-chip active" data-filter="active" aria-pressed="false">Active (${active.length})</button>
+                </div>
+                <select class="sort-dropdown" id="sort-select" aria-label="Sort branches">
+                    <option value="health-asc">Health ↑</option>
+                    <option value="health-desc">Health ↓</option>
+                    <option value="name-asc">Name A-Z</option>
+                    <option value="name-desc">Name Z-A</option>
+                    <option value="age-asc">Newest first</option>
+                    <option value="age-desc">Oldest first</option>
+                </select>
+                <span class="result-count" id="result-count"></span>
+            </div>
+        </div>
+        <div id="no-results" class="no-results" style="display: none;">
+            <div class="no-results-icon">🔍</div>
+            <div>No branches match your search</div>
+            <button class="secondary" id="clear-filters-btn" style="margin-top: 8px;">Clear Filters</button>
+        </div>
+
         <div class="health-bar">
             <div>
                 <div class="health-score" style="color: ${avgHealth >= 70 ? 'var(--vscode-testing-iconPassed)' : avgHealth >= 40 ? 'var(--vscode-editorWarning-foreground)' : 'var(--vscode-editorError-foreground)'}">${avgHealth}</div>
@@ -1683,7 +1758,7 @@ function getWebviewContent(
             </div>
             <ul class="branch-list">
                 ${merged.map((b) => `
-                <li class="branch-item">
+                <li class="branch-item" data-branch="${escapeHtml(b.name)}" data-status="merged" data-health="${b.healthStatus || 'healthy'}" data-age="${b.daysOld}" data-author="${escapeHtml(b.author || '')}">
                     <input type="checkbox" class="merged-checkbox" data-branch="${escapeHtml(b.name)}">
                     <span class="health-dot" style="background: ${getHealthColor(b.healthStatus)}" title="${b.healthReason || ''}"></span>
                     <span class="branch-name">${escapeHtml(b.name)}${b.linkedIssue ? ` <span class="badge issue">${escapeHtml(b.linkedIssue)}</span>` : ''}</span>
@@ -1703,7 +1778,7 @@ function getWebviewContent(
             </div>
             <ul class="branch-list">
                 ${orphaned.map((b) => `
-                <li class="branch-item">
+                <li class="branch-item" data-branch="${escapeHtml(b.name)}" data-status="orphaned" data-health="${b.healthStatus || 'healthy'}" data-age="${b.daysOld}" data-author="${escapeHtml(b.author || '')}">
                     <input type="checkbox" class="orphaned-checkbox" data-branch="${escapeHtml(b.name)}">
                     <span class="health-dot" style="background: ${getHealthColor(b.healthStatus)}" title="${b.healthReason || ''}"></span>
                     <span class="branch-name">${escapeHtml(b.name)}</span>
@@ -1723,7 +1798,7 @@ function getWebviewContent(
             </div>
             <ul class="branch-list">
                 ${stale.map((b) => `
-                <li class="branch-item">
+                <li class="branch-item" data-branch="${escapeHtml(b.name)}" data-status="stale" data-health="${b.healthStatus || 'healthy'}" data-age="${b.daysOld}" data-author="${escapeHtml(b.author || '')}">
                     <input type="checkbox" class="stale-checkbox" data-branch="${escapeHtml(b.name)}">
                     <span class="health-dot" style="background: ${getHealthColor(b.healthStatus)}" title="${b.healthReason || ''}"></span>
                     <span class="branch-name">${escapeHtml(b.name)}${b.linkedIssue ? ` <span class="badge issue">${escapeHtml(b.linkedIssue)}</span>` : ''}</span>
@@ -1742,7 +1817,7 @@ function getWebviewContent(
             </div>
             <ul class="branch-list">
                 ${active.map((b) => `
-                <li class="branch-item">
+                <li class="branch-item" data-branch="${escapeHtml(b.name)}" data-status="active" data-health="${b.healthStatus || 'healthy'}" data-age="${b.daysOld}" data-author="${escapeHtml(b.author || '')}">
                     <span class="health-dot" style="background: ${getHealthColor(b.healthStatus)}" title="${b.healthReason || ''}"></span>
                     <span class="branch-name">${escapeHtml(b.name)}${b.linkedIssue ? ` <span class="badge issue">${escapeHtml(b.linkedIssue)}</span>` : ''}</span>
                     <span class="branch-meta">${formatAge(b.daysOld)}${b.ahead || b.behind ? ` <span class="badge">${b.ahead ? `+${b.ahead}` : ''}${b.behind ? `-${b.behind}` : ''}</span>` : ''}</span>
@@ -1857,6 +1932,226 @@ function getWebviewContent(
             t.innerHTML = s;
             return t.value;
         }
+
+        // Search and Filter State
+        const searchState = {
+            query: '',
+            statusFilters: new Set(),
+            sortField: 'health',
+            sortDirection: 'asc'
+        };
+
+        // Fuzzy match with highlighting
+        function fuzzyMatch(text, query) {
+            if (!query) return { match: true, score: 0, indices: [] };
+            const textLower = text.toLowerCase();
+            const queryLower = query.toLowerCase();
+            let queryIdx = 0, textIdx = 0, score = 0;
+            const indices = [];
+            let consecutive = 0;
+
+            while (queryIdx < queryLower.length && textIdx < textLower.length) {
+                if (queryLower[queryIdx] === textLower[textIdx]) {
+                    indices.push(textIdx);
+                    score += 1;
+                    consecutive++;
+                    score += consecutive * 0.5;
+                    if (textIdx === 0 || text[textIdx - 1] === '-' || text[textIdx - 1] === '/' || text[textIdx - 1] === '_') {
+                        score += 3;
+                    }
+                    queryIdx++;
+                } else {
+                    consecutive = 0;
+                }
+                textIdx++;
+            }
+            return queryIdx === queryLower.length ? { match: true, score, indices } : { match: false, score: 0, indices: [] };
+        }
+
+        // Highlight matched characters
+        function highlightMatch(text, indices) {
+            if (!indices.length) return text;
+            let result = '';
+            let lastIndex = 0;
+            for (const idx of indices) {
+                result += text.slice(lastIndex, idx);
+                result += '<mark class="highlight">' + text[idx] + '</mark>';
+                lastIndex = idx + 1;
+            }
+            result += text.slice(lastIndex);
+            return result;
+        }
+
+        // Apply filters and search
+        function applyFiltersAndSearch() {
+            const items = document.querySelectorAll('#local .branch-item');
+            const sections = document.querySelectorAll('#local .section');
+            let visibleCount = 0;
+            let totalCount = items.length;
+
+            items.forEach(item => {
+                const branch = item.dataset.branch || '';
+                const status = item.dataset.status || '';
+                const author = item.dataset.author || '';
+
+                // Check status filter
+                let statusMatch = searchState.statusFilters.size === 0 || searchState.statusFilters.has(status);
+
+                // Check search query
+                let searchMatch = true;
+                let matchResult = { match: true, indices: [] };
+                if (searchState.query) {
+                    matchResult = fuzzyMatch(branch, searchState.query);
+                    const authorMatch = fuzzyMatch(author, searchState.query);
+                    searchMatch = matchResult.match || authorMatch.match;
+                }
+
+                const visible = statusMatch && searchMatch;
+                item.classList.toggle('hidden', !visible);
+
+                if (visible) {
+                    visibleCount++;
+                    // Update branch name with highlighting
+                    const nameEl = item.querySelector('.branch-name');
+                    if (nameEl && searchState.query && matchResult.match) {
+                        const originalName = decode(branch);
+                        const badges = nameEl.querySelectorAll('.badge');
+                        const badgeHtml = Array.from(badges).map(b => b.outerHTML).join('');
+                        nameEl.innerHTML = highlightMatch(originalName, matchResult.indices) + (badgeHtml ? ' ' + badgeHtml : '');
+                    }
+                }
+            });
+
+            // Update result count
+            const countEl = document.getElementById('result-count');
+            if (countEl) {
+                if (searchState.query || searchState.statusFilters.size > 0) {
+                    countEl.textContent = visibleCount + ' of ' + totalCount;
+                } else {
+                    countEl.textContent = '';
+                }
+            }
+
+            // Show/hide no results message
+            const noResults = document.getElementById('no-results');
+            const healthBar = document.querySelector('#local .health-bar');
+            if (noResults && healthBar) {
+                if (visibleCount === 0 && (searchState.query || searchState.statusFilters.size > 0)) {
+                    noResults.style.display = 'block';
+                    healthBar.style.display = 'none';
+                    sections.forEach(s => s.style.display = 'none');
+                } else {
+                    noResults.style.display = 'none';
+                    healthBar.style.display = 'flex';
+                    sections.forEach(s => s.style.display = 'block');
+                }
+            }
+
+            // Hide sections that have no visible items
+            sections.forEach(section => {
+                const visibleItems = section.querySelectorAll('.branch-item:not(.hidden)');
+                if (visibleItems.length === 0 && visibleCount > 0) {
+                    section.style.display = 'none';
+                }
+            });
+        }
+
+        // Sort branches
+        function sortBranches() {
+            const lists = document.querySelectorAll('#local .branch-list');
+            lists.forEach(list => {
+                const items = Array.from(list.querySelectorAll('.branch-item'));
+                items.sort((a, b) => {
+                    let aVal, bVal;
+                    switch (searchState.sortField) {
+                        case 'name':
+                            aVal = (a.dataset.branch || '').toLowerCase();
+                            bVal = (b.dataset.branch || '').toLowerCase();
+                            return searchState.sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                        case 'age':
+                            aVal = parseInt(a.dataset.age) || 0;
+                            bVal = parseInt(b.dataset.age) || 0;
+                            return searchState.sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+                        case 'health':
+                        default:
+                            const healthOrder = { danger: 0, critical: 1, warning: 2, healthy: 3 };
+                            aVal = healthOrder[a.dataset.health] ?? 3;
+                            bVal = healthOrder[b.dataset.health] ?? 3;
+                            return searchState.sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+                    }
+                });
+                items.forEach(item => list.appendChild(item));
+            });
+        }
+
+        // Debounce helper
+        function debounce(fn, delay) {
+            let timer;
+            return function(...args) {
+                clearTimeout(timer);
+                timer = setTimeout(() => fn.apply(this, args), delay);
+            };
+        }
+
+        // Search input handler
+        const searchInput = document.getElementById('branch-search');
+        const debouncedSearch = debounce(() => {
+            searchState.query = searchInput?.value || '';
+            applyFiltersAndSearch();
+        }, 150);
+
+        searchInput?.addEventListener('input', debouncedSearch);
+
+        // Clear search button
+        document.getElementById('search-clear')?.addEventListener('click', () => {
+            if (searchInput) searchInput.value = '';
+            searchState.query = '';
+            applyFiltersAndSearch();
+        });
+
+        // Clear filters button
+        document.getElementById('clear-filters-btn')?.addEventListener('click', () => {
+            if (searchInput) searchInput.value = '';
+            searchState.query = '';
+            searchState.statusFilters.clear();
+            document.querySelectorAll('.filter-chip').forEach(chip => chip.setAttribute('aria-pressed', 'false'));
+            applyFiltersAndSearch();
+        });
+
+        // Filter chips
+        document.querySelectorAll('.filter-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                const filter = chip.dataset.filter;
+                const isPressed = chip.getAttribute('aria-pressed') === 'true';
+                chip.setAttribute('aria-pressed', !isPressed);
+                if (isPressed) {
+                    searchState.statusFilters.delete(filter);
+                } else {
+                    searchState.statusFilters.add(filter);
+                }
+                applyFiltersAndSearch();
+            });
+        });
+
+        // Sort dropdown
+        document.getElementById('sort-select')?.addEventListener('change', e => {
+            const [field, dir] = e.target.value.split('-');
+            searchState.sortField = field;
+            searchState.sortDirection = dir;
+            sortBranches();
+        });
+
+        // Keyboard shortcut for search focus
+        document.addEventListener('keydown', e => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+                e.preventDefault();
+                searchInput?.focus();
+                searchInput?.select();
+            }
+            if (e.key === 'Escape' && document.activeElement === searchInput) {
+                searchInput.blur();
+            }
+        });
 
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', () => {

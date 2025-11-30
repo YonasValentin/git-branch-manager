@@ -2,6 +2,18 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [1.4.0] - 2025-01-30
+
+### Added
+- **Advanced Search & Filtering**: Instantly find branches with fuzzy search
+- Search input with keyboard shortcut (Cmd/Ctrl+F to focus)
+- Filter chips to quickly filter by status (Merged, Stale, Orphaned, Active)
+- Sort dropdown (Health, Name A-Z/Z-A, Newest/Oldest first)
+- Live result count showing filtered results
+- Match highlighting in search results
+- Empty state with clear filters button
+- Professional VS Code-native styling
+
 ## [1.3.1] - 2025-01-30
 
 ### Added
