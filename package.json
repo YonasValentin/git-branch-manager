@@ -2,7 +2,7 @@
   "name": "git-branch-manager-pro",
   "displayName": "Git Branch Manager - Clean & Organize",
   "description": "Clean up old and merged Git branches with one click. Dashboard view, bulk delete, branch templates.",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "publisher": "yonasvalentinmougaardkristensen",
   "engines": {
     "vscode": "^1.74.0"

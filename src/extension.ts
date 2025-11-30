@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
+import * as https from 'https';
 import { promisify } from 'util';
 
 const exec = promisify(cp.exec);
@@ -147,6 +148,31 @@ interface ComparisonResult {
   commitsB: CommitInfo[];
   files: FileChange[];
   mergeBase: string;
+}
+
+/**
+ * Branch note stored locally.
+ */
+interface BranchNote {
+  branch: string;
+  note: string;
+  updatedAt: number;
+}
+
+/**
+ * Auto-cleanup rule configuration.
+ */
+interface CleanupRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  conditions: {
+    merged?: boolean;
+    olderThanDays?: number;
+    pattern?: string;
+    noRemote?: boolean;
+  };
+  action: 'delete' | 'archive' | 'notify';
 }
 
 const BRANCH_TEMPLATES: BranchTemplate[] = [
@@ -835,6 +861,193 @@ async function getAllBranchNames(cwd: string): Promise<string[]> {
 }
 
 /**
+ * Renames a branch.
+ * @param cwd - Working directory
+ * @param oldName - Current branch name
+ * @param newName - New branch name
+ * @returns Success status
+ */
+async function renameBranch(cwd: string, oldName: string, newName: string): Promise<boolean> {
+  try {
+    await exec(`git branch -m ${JSON.stringify(oldName)} ${JSON.stringify(newName)}`, { cwd });
+    return true;
+  } catch (error) {
+    console.error('Error renaming branch:', error);
+    return false;
+  }
+}
+
+/**
+ * Deletes a branch without confirmation (for bulk operations).
+ * @param cwd - Working directory
+ * @param branchName - Branch to delete
+ * @returns Success status
+ */
+async function deleteBranchForce(cwd: string, branchName: string): Promise<boolean> {
+  try {
+    await exec(`git branch -D -- ${JSON.stringify(branchName)}`, { cwd });
+    return true;
+  } catch (error) {
+    console.error('Error deleting branch:', error);
+    return false;
+  }
+}
+
+/**
+ * Gets GitHub remote info from git config.
+ * @param cwd - Working directory
+ * @returns GitHub owner and repo, or null
+ */
+async function getGitHubInfo(cwd: string): Promise<{ owner: string; repo: string } | null> {
+  try {
+    const { stdout } = await exec('git remote get-url origin', { cwd });
+    const url = stdout.trim();
+    const match = url.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+    if (match) {
+      return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Fetches PR status for branches from GitHub API.
+ * @param owner - Repository owner
+ * @param repo - Repository name
+ * @param branches - Branch names to check
+ * @param token - GitHub token (optional)
+ * @returns Map of branch name to PR status
+ */
+async function fetchGitHubPRs(
+  owner: string,
+  repo: string,
+  branches: string[],
+  token?: string
+): Promise<Map<string, PRStatus>> {
+  const result = new Map<string, PRStatus>();
+  return new Promise((resolve) => {
+    const options: https.RequestOptions = {
+      hostname: 'api.github.com',
+      path: `/repos/${owner}/${repo}/pulls?state=all&per_page=100`,
+      method: 'GET',
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'git-branch-manager-vscode',
+        ...(token ? { 'Authorization': `token ${token}` } : {}),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          if (res.statusCode !== 200) {
+            resolve(result);
+            return;
+          }
+          const prs = JSON.parse(data) as any[];
+          for (const pr of prs) {
+            const branchName = pr.head?.ref;
+            if (branchName && branches.includes(branchName)) {
+              result.set(branchName, {
+                number: pr.number,
+                state: pr.merged_at ? 'merged' : pr.draft ? 'draft' : pr.state,
+                title: pr.title,
+                url: pr.html_url,
+              });
+            }
+          }
+          resolve(result);
+        } catch {
+          resolve(result);
+        }
+      });
+    });
+
+    req.on('error', () => { resolve(result); });
+    req.end();
+  });
+}
+
+/**
+ * Gets branch notes from extension storage.
+ * @param context - Extension context
+ * @param repoPath - Repository path for scoping
+ * @returns Map of branch name to note
+ */
+function getBranchNotes(context: vscode.ExtensionContext, repoPath: string): Map<string, BranchNote> {
+  const key = `branchNotes:${repoPath}`;
+  const stored = context.workspaceState.get<Record<string, BranchNote>>(key, {});
+  return new Map(Object.entries(stored));
+}
+
+/**
+ * Saves a branch note to extension storage.
+ * @param context - Extension context
+ * @param repoPath - Repository path for scoping
+ * @param branch - Branch name
+ * @param note - Note content (empty to delete)
+ */
+async function saveBranchNote(
+  context: vscode.ExtensionContext,
+  repoPath: string,
+  branch: string,
+  note: string
+): Promise<void> {
+  const key = `branchNotes:${repoPath}`;
+  const stored = context.workspaceState.get<Record<string, BranchNote>>(key, {});
+  if (note.trim()) {
+    stored[branch] = { branch, note: note.trim(), updatedAt: Date.now() };
+  } else {
+    delete stored[branch];
+  }
+  await context.workspaceState.update(key, stored);
+}
+
+/**
+ * Gets cleanup rules from extension storage.
+ * @param context - Extension context
+ * @returns Array of cleanup rules
+ */
+function getCleanupRules(context: vscode.ExtensionContext): CleanupRule[] {
+  return context.globalState.get<CleanupRule[]>('cleanupRules', []);
+}
+
+/**
+ * Saves cleanup rules to extension storage.
+ * @param context - Extension context
+ * @param rules - Rules to save
+ */
+async function saveCleanupRules(context: vscode.ExtensionContext, rules: CleanupRule[]): Promise<void> {
+  await context.globalState.update('cleanupRules', rules);
+}
+
+/**
+ * Evaluates which branches match a cleanup rule.
+ * @param branches - All branches
+ * @param rule - Rule to evaluate
+ * @returns Matching branches
+ */
+function evaluateCleanupRule(branches: BranchInfo[], rule: CleanupRule): BranchInfo[] {
+  return branches.filter(b => {
+    if (b.isCurrentBranch) return false;
+    if (rule.conditions.merged !== undefined && b.isMerged !== rule.conditions.merged) return false;
+    if (rule.conditions.olderThanDays && b.daysOld < rule.conditions.olderThanDays) return false;
+    if (rule.conditions.noRemote && b.hasRemote) return false;
+    if (rule.conditions.pattern) {
+      try {
+        const regex = new RegExp(rule.conditions.pattern);
+        if (!regex.test(b.name)) return false;
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+/**
  * Quick stash command handler.
  */
 async function quickStash() {
@@ -1262,6 +1475,8 @@ async function showBranchManager(context: vscode.ExtensionContext) {
   const remoteBranches = await getRemoteBranchInfo(gitRoot);
   const worktrees = await getWorktreeInfo(gitRoot);
   const stashes = await getStashInfo(gitRoot);
+  const branchNotes = getBranchNotes(context, gitRoot);
+  const cleanupRules = getCleanupRules(context);
 
   const config = vscode.workspace.getConfiguration('gitBranchManager');
   const protectedBranches = config.get<string[]>('protectedBranches', [
@@ -1306,7 +1521,7 @@ async function showBranchManager(context: vscode.ExtensionContext) {
   );
 
   const nonce = getNonce();
-  panel.webview.html = getWebviewContent(branches, remoteBranches, worktrees, stashes, protectedBranches, panel.webview.cspSource, nonce);
+  panel.webview.html = getWebviewContent(branches, remoteBranches, worktrees, stashes, protectedBranches, panel.webview.cspSource, nonce, branchNotes, cleanupRules);
 
   panel.webview.onDidReceiveMessage(
     async (message) => {
@@ -1505,6 +1720,187 @@ async function showBranchManager(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage(`Failed to compare branches: ${error.message}`);
           }
           break;
+
+        case 'previewRename':
+          try {
+            const find = message.find;
+            const replace = message.replace || '';
+            const regex = new RegExp(find);
+            const matches: { oldName: string; newName: string }[] = [];
+            for (const b of branches) {
+              if (b.isCurrentBranch || protectedBranches.includes(b.name)) continue;
+              if (regex.test(b.name)) {
+                matches.push({ oldName: b.name, newName: b.name.replace(regex, replace) });
+              }
+            }
+            panel.webview.postMessage({ command: 'renamePreview', matches });
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Invalid regex: ${error.message}`);
+          }
+          break;
+
+        case 'applyRename':
+          try {
+            const cwd = gitRoot as string;
+            const renames = message.renames as { oldName: string; newName: string }[];
+            let successCount = 0;
+            for (const r of renames) {
+              if (await renameBranch(cwd, r.oldName, r.newName)) {
+                successCount++;
+              }
+            }
+            vscode.window.showInformationMessage(`Renamed ${successCount} of ${renames.length} branches`);
+            await refreshPanel();
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to rename: ${error.message}`);
+          }
+          break;
+
+        case 'regexMatch':
+          try {
+            const pattern = message.pattern;
+            const regex = new RegExp(pattern);
+            const matches = branches
+              .filter(b => !b.isCurrentBranch && !protectedBranches.includes(b.name) && regex.test(b.name))
+              .map(b => b.name);
+            panel.webview.postMessage({ command: 'regexMatches', matches });
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Invalid regex: ${error.message}`);
+          }
+          break;
+
+        case 'regexDelete':
+          try {
+            const cwd = gitRoot as string;
+            const toDelete = message.branches as string[];
+            const confirmed = await vscode.window.showWarningMessage(
+              `Delete ${toDelete.length} branches matching pattern?`,
+              { modal: true },
+              'Delete'
+            );
+            if (confirmed === 'Delete') {
+              let successCount = 0;
+              for (const name of toDelete) {
+                if (await deleteBranchForce(cwd, name)) {
+                  successCount++;
+                }
+              }
+              vscode.window.showInformationMessage(`Deleted ${successCount} of ${toDelete.length} branches`);
+              await refreshPanel();
+            }
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to delete: ${error.message}`);
+          }
+          break;
+
+        case 'saveNote':
+          try {
+            const cwd = gitRoot as string;
+            await saveBranchNote(context, cwd, message.branch, message.note);
+            vscode.window.showInformationMessage(message.note ? `Note saved for ${message.branch}` : `Note removed from ${message.branch}`);
+            await refreshPanel();
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to save note: ${error.message}`);
+          }
+          break;
+
+        case 'addCleanupRule':
+          try {
+            const rules = getCleanupRules(context);
+            const newRule: CleanupRule = {
+              id: Date.now().toString(),
+              name: message.name,
+              enabled: true,
+              conditions: message.conditions,
+              action: message.action || 'delete',
+            };
+            rules.push(newRule);
+            await saveCleanupRules(context, rules);
+            vscode.window.showInformationMessage(`Cleanup rule "${message.name}" added`);
+            await refreshPanel();
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to add rule: ${error.message}`);
+          }
+          break;
+
+        case 'toggleRule':
+          try {
+            const rules = getCleanupRules(context);
+            const rule = rules.find(r => r.id === message.id);
+            if (rule) {
+              rule.enabled = message.enabled;
+              await saveCleanupRules(context, rules);
+            }
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to toggle rule: ${error.message}`);
+          }
+          break;
+
+        case 'deleteRule':
+          try {
+            const rules = getCleanupRules(context).filter(r => r.id !== message.id);
+            await saveCleanupRules(context, rules);
+            await refreshPanel();
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to delete rule: ${error.message}`);
+          }
+          break;
+
+        case 'runCleanupRules':
+          try {
+            const cwd = gitRoot as string;
+            const rules = getCleanupRules(context).filter(r => r.enabled);
+            const toDelete: Set<string> = new Set();
+            for (const rule of rules) {
+              const matches = evaluateCleanupRule(branches, rule);
+              for (const b of matches) {
+                if (!protectedBranches.includes(b.name)) {
+                  toDelete.add(b.name);
+                }
+              }
+            }
+            if (toDelete.size === 0) {
+              vscode.window.showInformationMessage('No branches matched cleanup rules');
+              break;
+            }
+            const confirmed = await vscode.window.showWarningMessage(
+              `Delete ${toDelete.size} branches matching cleanup rules?`,
+              { modal: true },
+              'Delete'
+            );
+            if (confirmed === 'Delete') {
+              let successCount = 0;
+              for (const name of toDelete) {
+                if (await deleteBranchForce(cwd, name)) {
+                  successCount++;
+                }
+              }
+              vscode.window.showInformationMessage(`Deleted ${successCount} branches`);
+              await refreshPanel();
+            }
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to run rules: ${error.message}`);
+          }
+          break;
+
+        case 'fetchPRs':
+          try {
+            const cwd = gitRoot as string;
+            const ghInfo = await getGitHubInfo(cwd);
+            if (!ghInfo) {
+              vscode.window.showWarningMessage('Could not detect GitHub repository');
+              break;
+            }
+            const branchNames = branches.map(b => b.name);
+            const prMap = await fetchGitHubPRs(ghInfo.owner, ghInfo.repo, branchNames, message.token);
+            const prData: Record<string, PRStatus> = {};
+            prMap.forEach((v, k) => { prData[k] = v; });
+            panel.webview.postMessage({ command: 'prStatus', data: prData });
+            vscode.window.showInformationMessage(`Found ${prMap.size} branches with PRs`);
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to fetch PRs: ${error.message}`);
+          }
+          break;
       }
 
       async function refreshPanel() {
@@ -1513,8 +1909,10 @@ async function showBranchManager(context: vscode.ExtensionContext) {
         const newRemotes = await getRemoteBranchInfo(cwd);
         const newWorktrees = await getWorktreeInfo(cwd);
         const newStashes = await getStashInfo(cwd);
+        const newNotes = getBranchNotes(context, cwd);
+        const newRules = getCleanupRules(context);
         const newNonce = getNonce();
-        panel.webview.html = getWebviewContent(newBranches, newRemotes, newWorktrees, newStashes, protectedBranches, panel.webview.cspSource, newNonce);
+        panel.webview.html = getWebviewContent(newBranches, newRemotes, newWorktrees, newStashes, protectedBranches, panel.webview.cspSource, newNonce, newNotes, newRules);
         await updateGlobalStatusBar();
       }
     },
@@ -1716,7 +2114,9 @@ function getWebviewContent(
   stashes: StashInfo[],
   protectedBranches: string[],
   cspSource: string,
-  nonce: string
+  nonce: string,
+  branchNotes: Map<string, BranchNote> = new Map(),
+  cleanupRules: CleanupRule[] = []
 ): string {
   const config = vscode.workspace.getConfiguration('gitBranchManager');
   const daysUntilStale = config.get<number>('daysUntilStale', 30);
@@ -1858,6 +2258,27 @@ function getWebviewContent(
         .file-status.D { color: var(--vscode-editorError-foreground); }
         .file-status.R { color: var(--vscode-editorInfo-foreground); }
         .compare-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--vscode-panel-border); }
+        .pr-badge { font-size: 10px; padding: 1px 6px; border-radius: 3px; margin-left: 4px; }
+        .pr-badge.open { background: var(--vscode-testing-iconPassed); color: var(--vscode-editor-background); }
+        .pr-badge.merged { background: var(--vscode-charts-purple); color: var(--vscode-editor-background); }
+        .pr-badge.closed { background: var(--vscode-editorError-foreground); color: var(--vscode-editor-background); }
+        .pr-badge.draft { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+        .note-icon { cursor: pointer; opacity: 0.5; font-size: 12px; }
+        .note-icon:hover { opacity: 1; }
+        .note-icon.has-note { opacity: 0.8; color: var(--vscode-editorWarning-foreground); }
+        .tools-section { padding: 12px; background: var(--vscode-editor-inactiveSelectionBackground); border-radius: 4px; margin-bottom: 12px; }
+        .tools-section h3 { margin: 0 0 8px 0; font-size: 12px; font-weight: 600; }
+        .tools-row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+        .tools-input { flex: 1; min-width: 150px; padding: 4px 8px; background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); color: var(--vscode-input-foreground); border-radius: 3px; font-size: 12px; }
+        .tools-input:focus { border-color: var(--vscode-focusBorder); outline: none; }
+        .rule-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--vscode-list-inactiveSelectionBackground); border-radius: 3px; margin-bottom: 4px; }
+        .rule-item .rule-name { flex: 1; font-weight: 500; }
+        .rule-item .rule-desc { font-size: 11px; opacity: 0.6; }
+        .toggle-switch { position: relative; width: 32px; height: 16px; background: var(--vscode-button-secondaryBackground); border-radius: 8px; cursor: pointer; }
+        .toggle-switch.active { background: var(--vscode-testing-iconPassed); }
+        .toggle-switch::after { content: ''; position: absolute; width: 12px; height: 12px; background: white; border-radius: 50%; top: 2px; left: 2px; transition: left 0.15s; }
+        .toggle-switch.active::after { left: 18px; }
+        .batch-results { margin-top: 8px; font-size: 11px; opacity: 0.7; }
     </style>
 </head>
 <body>
@@ -1875,6 +2296,7 @@ function getWebviewContent(
         <button class="tab" data-tab="worktrees">Worktrees (${worktrees.length})</button>
         <button class="tab" data-tab="stashes">Stashes${stashes.length > 0 ? ` (${stashes.length})` : ''}</button>
         <button class="tab" data-tab="compare">Compare</button>
+        <button class="tab" data-tab="tools">Tools</button>
     </div>
 
     <div id="local" class="tab-content active">
@@ -2106,6 +2528,86 @@ function getWebviewContent(
         <div class="compare-actions">
             <button class="secondary" id="swap-branches-btn">Swap</button>
             <button id="compare-btn">Compare</button>
+        </div>
+    </div>
+
+    <div id="tools" class="tab-content">
+        <div class="tools-section">
+            <h3>Batch Rename</h3>
+            <div class="tools-row">
+                <input type="text" class="tools-input" id="rename-find" placeholder="Find pattern (regex)">
+                <input type="text" class="tools-input" id="rename-replace" placeholder="Replace with">
+                <button class="secondary" id="rename-preview-btn">Preview</button>
+                <button id="rename-apply-btn" disabled>Apply</button>
+            </div>
+            <div id="rename-results" class="batch-results"></div>
+        </div>
+
+        <div class="tools-section">
+            <h3>Regex Selection</h3>
+            <div class="tools-row">
+                <input type="text" class="tools-input" id="regex-pattern" placeholder="Pattern to match branches (e.g., feature/.*)">
+                <button class="secondary" id="regex-select-btn">Select Matching</button>
+                <button class="danger" id="regex-delete-btn" disabled>Delete Matching</button>
+            </div>
+            <div id="regex-results" class="batch-results"></div>
+        </div>
+
+        <div class="tools-section">
+            <h3>Branch Notes</h3>
+            <div class="tools-row">
+                <select class="tools-input" id="note-branch-select" style="flex: 0 0 200px;">
+                    ${branches.map(b => `<option value="${escapeHtml(b.name)}">${escapeHtml(b.name)}</option>`).join('')}
+                </select>
+                <input type="text" class="tools-input" id="note-input" placeholder="Add a note for this branch">
+                <button id="save-note-btn">Save Note</button>
+            </div>
+            ${branchNotes.size > 0 ? `
+            <div style="margin-top: 8px;">
+                ${Array.from(branchNotes.values()).map(n => `
+                <div class="rule-item">
+                    <span class="rule-name">${escapeHtml(n.branch)}</span>
+                    <span class="rule-desc">${escapeHtml(n.note)}</span>
+                    <button class="secondary delete-note-btn" data-branch="${escapeHtml(n.branch)}">Remove</button>
+                </div>
+                `).join('')}
+            </div>
+            ` : ''}
+        </div>
+
+        <div class="tools-section">
+            <h3>Auto-Cleanup Rules</h3>
+            <div class="tools-row">
+                <button class="secondary" id="add-rule-btn">Add Rule</button>
+                <button id="run-rules-btn"${cleanupRules.length === 0 ? ' disabled' : ''}>Run All Rules</button>
+            </div>
+            ${cleanupRules.length > 0 ? `
+            <div style="margin-top: 8px;">
+                ${cleanupRules.map(r => `
+                <div class="rule-item">
+                    <div class="toggle-switch${r.enabled ? ' active' : ''}" data-rule-id="${r.id}"></div>
+                    <div style="flex: 1;">
+                        <div class="rule-name">${escapeHtml(r.name)}</div>
+                        <div class="rule-desc">
+                            ${r.conditions.merged ? 'Merged' : ''}
+                            ${r.conditions.olderThanDays ? `> ${r.conditions.olderThanDays} days old` : ''}
+                            ${r.conditions.pattern ? `matches /${escapeHtml(r.conditions.pattern)}/` : ''}
+                            ${r.conditions.noRemote ? 'no remote' : ''}
+                        </div>
+                    </div>
+                    <button class="danger delete-rule-btn" data-rule-id="${r.id}">Delete</button>
+                </div>
+                `).join('')}
+            </div>
+            ` : '<p class="empty-msg">No cleanup rules configured. Add a rule to automate branch cleanup.</p>'}
+        </div>
+
+        <div class="tools-section">
+            <h3>GitHub Integration</h3>
+            <div class="tools-row">
+                <button id="fetch-prs-btn">Fetch PR Status</button>
+            </div>
+            <p style="font-size: 11px; opacity: 0.6; margin-top: 4px;">Fetches PR status for branches from GitHub. Works best with public repos or a configured GitHub token.</p>
         </div>
     </div>
 
@@ -2532,6 +3034,107 @@ function getWebviewContent(
         document.getElementById('sponsor-link')?.addEventListener('click', e => { e.preventDefault(); vscode.postMessage({ command: 'openSponsor' }); });
         document.getElementById('coffee-link')?.addEventListener('click', e => { e.preventDefault(); vscode.postMessage({ command: 'openSupport' }); });
         document.getElementById('github-link')?.addEventListener('click', e => { e.preventDefault(); vscode.postMessage({ command: 'openGithub' }); });
+
+        // Tools: Batch Rename
+        let renameMatches = [];
+        document.getElementById('rename-preview-btn')?.addEventListener('click', () => {
+            const find = document.getElementById('rename-find')?.value;
+            const replace = document.getElementById('rename-replace')?.value;
+            if (find) {
+                vscode.postMessage({ command: 'previewRename', find, replace: replace || '' });
+            }
+        });
+        document.getElementById('rename-apply-btn')?.addEventListener('click', () => {
+            if (renameMatches.length > 0) {
+                vscode.postMessage({ command: 'applyRename', renames: renameMatches });
+            }
+        });
+
+        // Tools: Regex Selection
+        let regexMatches = [];
+        document.getElementById('regex-select-btn')?.addEventListener('click', () => {
+            const pattern = document.getElementById('regex-pattern')?.value;
+            if (pattern) {
+                vscode.postMessage({ command: 'regexMatch', pattern });
+            }
+        });
+        document.getElementById('regex-delete-btn')?.addEventListener('click', () => {
+            if (regexMatches.length > 0) {
+                vscode.postMessage({ command: 'regexDelete', branches: regexMatches });
+            }
+        });
+
+        // Tools: Branch Notes
+        document.getElementById('save-note-btn')?.addEventListener('click', () => {
+            const branch = document.getElementById('note-branch-select')?.value;
+            const note = document.getElementById('note-input')?.value;
+            if (branch) {
+                vscode.postMessage({ command: 'saveNote', branch, note: note || '' });
+            }
+        });
+        document.querySelectorAll('.delete-note-btn').forEach(btn => {
+            btn.addEventListener('click', e => {
+                vscode.postMessage({ command: 'saveNote', branch: decode(e.target.dataset.branch), note: '' });
+            });
+        });
+
+        // Tools: Cleanup Rules
+        document.getElementById('add-rule-btn')?.addEventListener('click', () => {
+            vscode.postMessage({ command: 'addCleanupRule' });
+        });
+        document.getElementById('run-rules-btn')?.addEventListener('click', () => {
+            vscode.postMessage({ command: 'runCleanupRules' });
+        });
+        document.querySelectorAll('.toggle-switch').forEach(toggle => {
+            toggle.addEventListener('click', () => {
+                const ruleId = toggle.dataset.ruleId;
+                const enabled = !toggle.classList.contains('active');
+                vscode.postMessage({ command: 'toggleRule', ruleId, enabled });
+            });
+        });
+        document.querySelectorAll('.delete-rule-btn').forEach(btn => {
+            btn.addEventListener('click', e => {
+                vscode.postMessage({ command: 'deleteRule', ruleId: e.target.dataset.ruleId });
+            });
+        });
+
+        // Tools: GitHub Integration
+        document.getElementById('fetch-prs-btn')?.addEventListener('click', () => {
+            vscode.postMessage({ command: 'fetchPRs' });
+        });
+
+        // Handle tool results
+        window.addEventListener('message', event => {
+            const msg = event.data;
+            if (msg.command === 'renamePreview') {
+                renameMatches = msg.matches;
+                const resultsEl = document.getElementById('rename-results');
+                const applyBtn = document.getElementById('rename-apply-btn');
+                if (resultsEl) {
+                    if (msg.matches.length > 0) {
+                        resultsEl.innerHTML = msg.matches.map(m => m.from + ' → ' + m.to).join('<br>');
+                        if (applyBtn) applyBtn.disabled = false;
+                    } else {
+                        resultsEl.textContent = 'No matches found';
+                        if (applyBtn) applyBtn.disabled = true;
+                    }
+                }
+            }
+            if (msg.command === 'regexMatches') {
+                regexMatches = msg.branches;
+                const resultsEl = document.getElementById('regex-results');
+                const deleteBtn = document.getElementById('regex-delete-btn');
+                if (resultsEl) {
+                    if (msg.branches.length > 0) {
+                        resultsEl.textContent = msg.branches.length + ' branch(es) match: ' + msg.branches.join(', ');
+                        if (deleteBtn) deleteBtn.disabled = false;
+                    } else {
+                        resultsEl.textContent = 'No matches found';
+                        if (deleteBtn) deleteBtn.disabled = true;
+                    }
+                }
+            }
+        });
     })();
     </script>
 </body>

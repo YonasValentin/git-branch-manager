@@ -2,6 +2,21 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [1.6.0] - 2025-01-30
+
+### Added
+- **Tools Tab**: New centralized tools panel for advanced operations
+- **Batch Rename**: Rename multiple branches using regex find/replace with preview
+- **Regex Selection**: Select and delete branches matching a pattern
+- **Branch Notes**: Add personal notes to branches (stored locally)
+- **Auto-Cleanup Rules**: Create configurable rules for automatic branch cleanup
+  - Filter by merge status, age, pattern, and remote tracking
+  - Toggle rules on/off individually
+  - Run all enabled rules with one click
+- **GitHub PR Integration**: Fetch and display PR status for branches
+  - Shows open, merged, and draft PR badges
+  - Links directly to GitHub PR pages
+
 ## [1.5.0] - 2025-01-30
 
 ### Added
