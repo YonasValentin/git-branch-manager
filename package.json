@@ -2,7 +2,7 @@
   "name": "git-branch-manager-pro",
   "displayName": "Git Branch Manager - Clean & Organize",
   "description": "Clean up old and merged Git branches with one click. Dashboard view, bulk delete, branch templates.",
-  "version": "1.2.10",
+  "version": "1.3.0",
   "publisher": "yonasvalentinmougaardkristensen",
   "engines": {
     "vscode": "^1.74.0"
@@ -76,6 +76,26 @@
         "command": "git-branch-manager.createBranch",
         "title": "Git Branch Manager: Create Branch from Template",
         "icon": "$(add)"
+      },
+      {
+        "command": "git-branch-manager.cleanRemotes",
+        "title": "Git Branch Manager: Clean Remote Branches"
+      },
+      {
+        "command": "git-branch-manager.manageWorktrees",
+        "title": "Git Branch Manager: Manage Worktrees"
+      },
+      {
+        "command": "git-branch-manager.createWorktree",
+        "title": "Git Branch Manager: Create Worktree"
+      },
+      {
+        "command": "git-branch-manager.stash",
+        "title": "Git Branch Manager: Quick Stash"
+      },
+      {
+        "command": "git-branch-manager.stashPop",
+        "title": "Git Branch Manager: Pop Latest Stash"
       }
     ],
     "menus": {
@@ -102,6 +122,26 @@
         },
         {
           "command": "git-branch-manager.createBranch",
+          "when": "gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "git-branch-manager.cleanRemotes",
+          "when": "gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "git-branch-manager.manageWorktrees",
+          "when": "gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "git-branch-manager.createWorktree",
+          "when": "gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "git-branch-manager.stash",
+          "when": "gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "git-branch-manager.stashPop",
           "when": "gitOpenRepositoryCount != 0"
         }
       ]

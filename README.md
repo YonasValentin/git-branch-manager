@@ -7,29 +7,56 @@
 
 **Stop manually deleting old branches.** This extension shows you which branches are merged or stale, and lets you clean them up with one click.
 
-## The Problem
+## Features
 
-You know that feeling when you run `git branch` and see 47 branches from features you shipped months ago? This fixes that.
+### Branch Health Scoring
+Every branch gets a health score (0-100) based on merge status, age, remote tracking, and commits behind. Instantly see which branches need attention.
 
-## What It Does
+### Local Branch Management
+- Dashboard showing all branches organized by status (merged, stale, orphaned, active)
+- Bulk delete operations with confirmation
+- Branch templates for consistent naming
 
-- Shows all your branches in a dashboard, organized by status (merged, old, active)
-- Identifies merged branches that are safe to delete
-- Flags old branches (30+ days since last commit, configurable)
-- One-click cleanup or select exactly which ones to delete
-- Branch templates for consistent naming (`feature/`, `bugfix/`, `hotfix/`, etc.)
-- Status bar indicator showing how many branches need attention
+### Remote Branch Management
+- View and clean merged remote branches
+- Prune stale remote references
+- Identify orphaned local branches (remote deleted)
+
+### Git Worktree Integration
+- List all worktrees in your repository
+- Create new worktrees from any branch
+- Open worktrees in new VS Code windows
+- Lock/unlock and remove worktrees
+
+### Stash Management
+- View all stashes with file count and age
+- Create stashes (with or without untracked files)
+- Apply, pop, or drop individual stashes
+- Clear all stashes with confirmation
 
 ## Quick Start
 
 1. Install the extension
 2. Click the branch icon in your status bar, or run `Git Branch Manager: Show Branch Cleaner`
-3. See your branches organized by type
-4. Delete what you don't need
+3. Use the tabs to navigate: Local, Remote, Worktrees, Stashes
+4. Clean up what you don't need
 
 **Keyboard shortcuts:**
 - `Cmd+Shift+G Cmd+Shift+C` (Mac) / `Ctrl+Shift+G Ctrl+Shift+C` (Windows) - Open dashboard
 - `Cmd+Shift+G Cmd+Shift+N` (Mac) / `Ctrl+Shift+G Ctrl+Shift+N` (Windows) - Create branch from template
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `Git Branch Manager: Show Branch Cleaner` | Open the main dashboard |
+| `Git Branch Manager: Quick Clean Merged Branches` | Delete all merged branches |
+| `Git Branch Manager: Create Branch from Template` | Create a new branch using templates |
+| `Git Branch Manager: Clean Remote Branches` | Clean merged remote branches |
+| `Git Branch Manager: Manage Worktrees` | View and manage worktrees |
+| `Git Branch Manager: Create Worktree` | Create a worktree from a branch |
+| `Git Branch Manager: Quick Stash` | Stash current changes |
+| `Git Branch Manager: Pop Latest Stash` | Pop the most recent stash |
 
 ## Branch Templates
 
@@ -47,7 +74,7 @@ Create branches with consistent naming:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `gitBranchManager.daysUntilStale` | `30` | Days before a branch is flagged as old |
+| `gitBranchManager.daysUntilStale` | `30` | Days before a branch is flagged as stale |
 | `gitBranchManager.protectedBranches` | `["main", "master", "develop", "dev", "staging", "production"]` | Branches that will never be suggested for deletion |
 | `gitBranchManager.confirmBeforeDelete` | `true` | Show confirmation dialog before deleting |
 | `gitBranchManager.showNotifications` | `true` | Show notifications when branches need cleanup |
@@ -55,16 +82,16 @@ Create branches with consistent naming:
 ## FAQ
 
 **Does this delete remote branches?**
-No. Only local branches. Your remote is safe.
+Yes, but only through the Remote tab with explicit confirmation. Local deletions don't affect your remote.
 
 **Can I undo a deletion?**
-Git doesn't make branch deletion easily reversible. That's why the extension shows a confirmation dialog. If you need to recover a deleted branch, you can use `git reflog` to find the commit and recreate it.
+Git doesn't make branch deletion easily reversible. That's why the extension shows confirmation dialogs. If you need to recover a deleted branch, use `git reflog` to find the commit and recreate it.
 
 **Why doesn't my branch show up?**
-Protected branches (main, master, develop, etc.) are hidden from the cleanup list. You can customize this list in settings.
+Protected branches (main, master, develop, etc.) are hidden from the cleanup list. You can customize this in settings.
 
-**Is this safe to use?**
-Yes. The extension only deletes local branches you explicitly select. It shows confirmations before bulk operations. Protected branches are never suggested for deletion.
+**What are orphaned branches?**
+Local branches whose remote tracking branch has been deleted. These are safe to clean up.
 
 ## Requirements
 
@@ -74,11 +101,11 @@ Yes. The extension only deletes local branches you explicitly select. It shows c
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for version history. This extension is actively maintained.
+See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## Found a Bug?
 
-[Open an issue on GitHub](https://github.com/yonasvalentin/git-branch-manager-pro/issues) - I read every one.
+[Open an issue on GitHub](https://github.com/yonasvalentin/git-branch-manager-pro/issues)
 
 ---
 
@@ -86,7 +113,7 @@ See [CHANGELOG.md](CHANGELOG.md) for version history. This extension is actively
 
 If this extension saves you time, consider:
 - [Leaving a review](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro&ssr=false#review-details) - helps others find it
-- [Buying me a coffee](https://www.buymeacoffee.com/YonasValentin) - fuels development of new features
+- [Buying me a coffee](https://www.buymeacoffee.com/YonasValentin) - fuels development
 
 [![Buy Me a Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/YonasValentin)
 
