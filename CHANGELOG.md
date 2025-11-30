@@ -2,6 +2,12 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [1.3.1] - 2025-01-30
+
+### Added
+- Expandable stash preview - click on a stash to see all changed files
+- File list shown with proper styling and file icons
+
 ## [1.3.0] - 2025-01-30
 
 ### Added

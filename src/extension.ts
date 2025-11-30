@@ -84,6 +84,7 @@ interface StashInfo {
   date: Date;
   daysOld: number;
   filesChanged?: number;
+  files?: string[];
 }
 
 /**
@@ -590,7 +591,13 @@ async function getStashInfo(cwd: string): Promise<StashInfo[]> {
         if (fileMatch) filesChanged = parseInt(fileMatch[1]);
       } catch {}
 
-      stashes.push({ index, message, branch, date, daysOld, filesChanged });
+      let files: string[] = [];
+      try {
+        const { stdout: nameOnly } = await exec(`git stash show stash@{${index}} --name-only`, { cwd });
+        files = nameOnly.trim().split('\n').filter(f => f);
+      } catch {}
+
+      stashes.push({ index, message, branch, date, daysOld, filesChanged, files });
     }
   } catch (error) {
     console.error('Error getting stash info:', error);
@@ -1620,13 +1627,21 @@ function getWebviewContent(
         input[type="checkbox"] { width: 14px; height: 14px; cursor: pointer; }
         .worktree-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--vscode-list-inactiveSelectionBackground); border-radius: 3px; margin-bottom: 2px; }
         .worktree-path { font-size: 11px; opacity: 0.6; }
-        .stash-item { display: flex; align-items: center; gap: 12px; padding: 8px; background: var(--vscode-list-inactiveSelectionBackground); border-radius: 3px; margin-bottom: 4px; }
-        .stash-item:hover { background: var(--vscode-list-hoverBackground); }
+        .stash-item { background: var(--vscode-list-inactiveSelectionBackground); border-radius: 3px; margin-bottom: 4px; }
+        .stash-item[open] { background: var(--vscode-list-activeSelectionBackground); }
+        .stash-summary { display: flex; align-items: center; gap: 12px; padding: 8px; cursor: pointer; list-style: none; }
+        .stash-summary::-webkit-details-marker { display: none; }
+        .stash-summary::before { content: '▶'; font-size: 10px; opacity: 0.5; transition: transform 0.15s; }
+        .stash-item[open] .stash-summary::before { transform: rotate(90deg); }
+        .stash-summary:hover { background: var(--vscode-list-hoverBackground); }
         .stash-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
         .stash-ref { font-size: 11px; opacity: 0.6; font-family: var(--vscode-editor-font-family); }
         .stash-message { font-weight: 500; }
         .stash-meta { display: flex; gap: 12px; font-size: 11px; opacity: 0.6; }
         .stash-actions { display: flex; gap: 4px; }
+        .stash-files { padding: 8px 12px 12px 24px; border-top: 1px solid var(--vscode-panel-border); }
+        .stash-file { font-family: var(--vscode-editor-font-family); font-size: 12px; padding: 2px 0; opacity: 0.8; }
+        .stash-file::before { content: ''; display: inline-block; width: 12px; height: 12px; margin-right: 6px; background: var(--vscode-symbolIcon-fileForeground); mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M13 4H8.41L6 1.59A2 2 0 005.17 1H3a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V6a2 2 0 00-2-2z'/%3E%3C/svg%3E") center/contain no-repeat; vertical-align: middle; }
     </style>
 </head>
 <body>
@@ -1791,21 +1806,28 @@ function getWebviewContent(
             ${stashes.length > 0 ? `
             <ul class="branch-list">
                 ${stashes.map((s) => `
-                <div class="stash-item">
-                    <div class="stash-info">
-                        <span class="stash-ref">stash@{${s.index}}</span>
-                        <span class="stash-message">${escapeHtml(s.message)}</span>
+                <details class="stash-item">
+                    <summary class="stash-summary">
+                        <div class="stash-info">
+                            <span class="stash-ref">stash@{${s.index}}</span>
+                            <span class="stash-message">${escapeHtml(s.message)}</span>
+                        </div>
+                        <div class="stash-meta">
+                            <span>${s.filesChanged ? `${s.filesChanged} file${s.filesChanged > 1 ? 's' : ''}` : ''}</span>
+                            <span>${formatAge(s.daysOld)}</span>
+                        </div>
+                        <div class="stash-actions">
+                            <button class="secondary apply-stash-btn" data-index="${s.index}">Apply</button>
+                            <button class="secondary pop-stash-btn" data-index="${s.index}">Pop</button>
+                            <button class="danger drop-stash-btn" data-index="${s.index}">Drop</button>
+                        </div>
+                    </summary>
+                    ${s.files && s.files.length > 0 ? `
+                    <div class="stash-files">
+                        ${s.files.map(f => `<div class="stash-file">${escapeHtml(f)}</div>`).join('')}
                     </div>
-                    <div class="stash-meta">
-                        <span>${s.filesChanged ? `${s.filesChanged} file${s.filesChanged > 1 ? 's' : ''}` : ''}</span>
-                        <span>${formatAge(s.daysOld)}</span>
-                    </div>
-                    <div class="stash-actions">
-                        <button class="secondary apply-stash-btn" data-index="${s.index}">Apply</button>
-                        <button class="secondary pop-stash-btn" data-index="${s.index}">Pop</button>
-                        <button class="danger drop-stash-btn" data-index="${s.index}">Drop</button>
-                    </div>
-                </div>
+                    ` : ''}
+                </details>
                 `).join('')}
             </ul>
             ${stashes.length > 1 ? `<button class="danger" id="clear-stashes-btn" style="margin-top: 12px;">Clear All Stashes</button>` : ''}
