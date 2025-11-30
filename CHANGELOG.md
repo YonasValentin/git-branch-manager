@@ -2,6 +2,15 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [1.5.0] - 2025-01-30
+
+### Added
+- Branch Comparison View - compare any two branches side by side
+- See commits ahead/behind between branches
+- View all file changes with status indicators (added, modified, deleted)
+- Swap branches button for quick comparison reversal
+- New Compare tab in the main dashboard
+
 ## [1.4.1] - 2025-01-30
 
 ### Fixed

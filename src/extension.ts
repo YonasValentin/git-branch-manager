@@ -116,6 +116,39 @@ interface FuzzyMatchResult {
   text: string;
 }
 
+/**
+ * Commit information for branch comparison.
+ */
+interface CommitInfo {
+  hash: string;
+  message: string;
+  author: string;
+  date: string;
+  daysOld: number;
+}
+
+/**
+ * File change information for branch comparison.
+ */
+interface FileChange {
+  path: string;
+  status: 'A' | 'M' | 'D' | 'R';
+}
+
+/**
+ * Branch comparison result.
+ */
+interface ComparisonResult {
+  branchA: string;
+  branchB: string;
+  ahead: number;
+  behind: number;
+  commitsA: CommitInfo[];
+  commitsB: CommitInfo[];
+  files: FileChange[];
+  mergeBase: string;
+}
+
 const BRANCH_TEMPLATES: BranchTemplate[] = [
   { name: 'Feature', pattern: 'feature/{description}', example: 'feature/add-user-auth' },
   { name: 'Bugfix', pattern: 'bugfix/{description}', example: 'bugfix/fix-login-error' },
@@ -705,6 +738,99 @@ async function clearStashes(cwd: string): Promise<boolean> {
   } catch (error) {
     console.error('Error clearing stashes:', error);
     return false;
+  }
+}
+
+/**
+ * Compares two branches and returns detailed comparison data.
+ * @param cwd - Working directory
+ * @param branchA - First branch (source)
+ * @param branchB - Second branch (target)
+ * @returns Comparison result with commits and file changes
+ */
+async function compareBranches(cwd: string, branchA: string, branchB: string): Promise<ComparisonResult> {
+  const result: ComparisonResult = {
+    branchA,
+    branchB,
+    ahead: 0,
+    behind: 0,
+    commitsA: [],
+    commitsB: [],
+    files: [],
+    mergeBase: '',
+  };
+
+  try {
+    // Get ahead/behind counts
+    const { stdout: countOutput } = await exec(
+      `git rev-list --left-right --count ${JSON.stringify(branchB)}...${JSON.stringify(branchA)}`,
+      { cwd }
+    );
+    const [behindStr, aheadStr] = countOutput.trim().split('\t');
+    result.behind = parseInt(behindStr) || 0;
+    result.ahead = parseInt(aheadStr) || 0;
+
+    // Get merge base
+    try {
+      const { stdout: mergeBase } = await exec(
+        `git merge-base ${JSON.stringify(branchA)} ${JSON.stringify(branchB)}`,
+        { cwd }
+      );
+      result.mergeBase = mergeBase.trim().substring(0, 7);
+    } catch {}
+
+    // Get commits unique to branchA (ahead commits)
+    if (result.ahead > 0) {
+      const { stdout: commitsA } = await exec(
+        `git log ${JSON.stringify(branchB)}..${JSON.stringify(branchA)} --pretty=format:"%h|%s|%an|%cr" --reverse`,
+        { cwd, maxBuffer: 1024 * 1024 }
+      );
+      result.commitsA = commitsA.trim().split('\n').filter(l => l).map(line => {
+        const [hash, message, author, date] = line.split('|');
+        return { hash, message, author, date, daysOld: 0 };
+      });
+    }
+
+    // Get commits unique to branchB (behind commits)
+    if (result.behind > 0) {
+      const { stdout: commitsB } = await exec(
+        `git log ${JSON.stringify(branchA)}..${JSON.stringify(branchB)} --pretty=format:"%h|%s|%an|%cr" --reverse`,
+        { cwd, maxBuffer: 1024 * 1024 }
+      );
+      result.commitsB = commitsB.trim().split('\n').filter(l => l).map(line => {
+        const [hash, message, author, date] = line.split('|');
+        return { hash, message, author, date, daysOld: 0 };
+      });
+    }
+
+    // Get file changes between branches
+    const { stdout: filesOutput } = await exec(
+      `git diff --name-status ${JSON.stringify(branchB)}..${JSON.stringify(branchA)}`,
+      { cwd, maxBuffer: 1024 * 1024 }
+    );
+    result.files = filesOutput.trim().split('\n').filter(l => l).map(line => {
+      const [status, ...pathParts] = line.split('\t');
+      return { status: status.charAt(0) as 'A' | 'M' | 'D' | 'R', path: pathParts.join('\t') };
+    });
+
+  } catch (error) {
+    console.error('Error comparing branches:', error);
+  }
+
+  return result;
+}
+
+/**
+ * Gets all branch names for comparison dropdown.
+ * @param cwd - Working directory
+ * @returns Array of branch names
+ */
+async function getAllBranchNames(cwd: string): Promise<string[]> {
+  try {
+    const { stdout } = await exec('git branch --format="%(refname:short)"', { cwd });
+    return stdout.trim().split('\n').filter(b => b);
+  } catch {
+    return [];
   }
 }
 
@@ -1369,6 +1495,16 @@ async function showBranchManager(context: vscode.ExtensionContext) {
             }
           }
           break;
+
+        case 'compareBranches':
+          try {
+            const cwd = gitRoot as string;
+            const result = await compareBranches(cwd, message.branchA, message.branchB);
+            panel.webview.postMessage({ command: 'comparisonResult', data: result });
+          } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to compare branches: ${error.message}`);
+          }
+          break;
       }
 
       async function refreshPanel() {
@@ -1687,6 +1823,41 @@ function getWebviewContent(
         .no-results-icon { font-size: 32px; margin-bottom: 8px; }
         .highlight { background: var(--vscode-editor-findMatchHighlightBackground); border-radius: 2px; }
         .branch-item.hidden { display: none; }
+        .compare-selectors { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; margin-bottom: 16px; align-items: end; }
+        .selector-group { display: flex; flex-direction: column; gap: 4px; }
+        .selector-label { font-size: 11px; font-weight: 500; opacity: 0.7; text-transform: uppercase; }
+        .branch-select { padding: 6px 10px; background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); color: var(--vscode-input-foreground); border-radius: 4px; font-size: 13px; cursor: pointer; }
+        .branch-select:focus { border-color: var(--vscode-focusBorder); outline: none; }
+        .vs-label { font-size: 12px; font-weight: 600; opacity: 0.5; text-align: center; padding-bottom: 8px; }
+        .compare-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; padding: 12px; background: var(--vscode-editor-inactiveSelectionBackground); border-radius: 4px; }
+        .stat-card { text-align: center; }
+        .stat-value { font-size: 20px; font-weight: 600; }
+        .stat-value.ahead { color: var(--vscode-testing-iconPassed); }
+        .stat-value.behind { color: var(--vscode-editorWarning-foreground); }
+        .stat-label { font-size: 11px; opacity: 0.6; margin-top: 2px; }
+        .commit-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+        .commit-column { min-height: 150px; max-height: 300px; overflow-y: auto; }
+        .commit-column-header { font-size: 12px; font-weight: 600; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid var(--vscode-panel-border); display: flex; justify-content: space-between; }
+        .commit-item { padding: 8px; background: var(--vscode-list-inactiveSelectionBackground); border-radius: 3px; margin-bottom: 4px; }
+        .commit-item:hover { background: var(--vscode-list-hoverBackground); }
+        .commit-hash { font-family: var(--vscode-editor-font-family); font-size: 11px; opacity: 0.6; }
+        .commit-message { font-size: 12px; font-weight: 500; margin: 4px 0; word-break: break-word; }
+        .commit-meta { font-size: 11px; opacity: 0.5; display: flex; justify-content: space-between; }
+        .file-changes { margin-top: 16px; }
+        .file-changes-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--vscode-list-inactiveSelectionBackground); border-radius: 4px; cursor: pointer; }
+        .file-changes-header:hover { background: var(--vscode-list-hoverBackground); }
+        .file-stats { display: flex; gap: 12px; font-size: 11px; }
+        .file-stats .added { color: var(--vscode-testing-iconPassed); }
+        .file-stats .modified { color: var(--vscode-editorWarning-foreground); }
+        .file-stats .deleted { color: var(--vscode-editorError-foreground); }
+        .file-list { padding: 8px 0; max-height: 200px; overflow-y: auto; }
+        .file-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-family: var(--vscode-editor-font-family); font-size: 12px; }
+        .file-status { width: 16px; font-weight: 600; text-align: center; }
+        .file-status.A { color: var(--vscode-testing-iconPassed); }
+        .file-status.M { color: var(--vscode-editorWarning-foreground); }
+        .file-status.D { color: var(--vscode-editorError-foreground); }
+        .file-status.R { color: var(--vscode-editorInfo-foreground); }
+        .compare-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--vscode-panel-border); }
     </style>
 </head>
 <body>
@@ -1703,6 +1874,7 @@ function getWebviewContent(
         <button class="tab" data-tab="remote">Remote</button>
         <button class="tab" data-tab="worktrees">Worktrees (${worktrees.length})</button>
         <button class="tab" data-tab="stashes">Stashes${stashes.length > 0 ? ` (${stashes.length})` : ''}</button>
+        <button class="tab" data-tab="compare">Compare</button>
     </div>
 
     <div id="local" class="tab-content active">
@@ -1907,6 +2079,33 @@ function getWebviewContent(
             </ul>
             ${stashes.length > 1 ? `<button class="danger" id="clear-stashes-btn" style="margin-top: 12px;">Clear All Stashes</button>` : ''}
             ` : `<p class="empty-msg">No stashes. Use "Stash Changes" to save uncommitted work.</p>`}
+        </div>
+    </div>
+
+    <div id="compare" class="tab-content">
+        <div class="compare-selectors">
+            <div class="selector-group">
+                <span class="selector-label">Source Branch</span>
+                <select class="branch-select" id="compare-branch-a">
+                    ${branches.map(b => `<option value="${escapeHtml(b.name)}"${b.isCurrentBranch ? ' selected' : ''}>${escapeHtml(b.name)}${b.isCurrentBranch ? ' (current)' : ''}</option>`).join('')}
+                </select>
+            </div>
+            <div class="vs-label">vs</div>
+            <div class="selector-group">
+                <span class="selector-label">Target Branch</span>
+                <select class="branch-select" id="compare-branch-b">
+                    ${branches.filter(b => !b.isCurrentBranch).map((b, i) => `<option value="${escapeHtml(b.name)}"${i === 0 ? ' selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}
+                </select>
+            </div>
+        </div>
+
+        <div id="compare-result">
+            <p class="empty-msg">Select two branches and click Compare to see differences.</p>
+        </div>
+
+        <div class="compare-actions">
+            <button class="secondary" id="swap-branches-btn">Swap</button>
+            <button id="compare-btn">Compare</button>
         </div>
     </div>
 
@@ -2228,6 +2427,106 @@ function getWebviewContent(
 
         document.querySelectorAll('.drop-stash-btn').forEach(btn => {
             btn.addEventListener('click', e => vscode.postMessage({ command: 'dropStash', index: parseInt(e.target.dataset.index) }));
+        });
+
+        document.getElementById('compare-btn')?.addEventListener('click', () => {
+            const branchA = document.getElementById('compare-branch-a')?.value;
+            const branchB = document.getElementById('compare-branch-b')?.value;
+            if (branchA && branchB && branchA !== branchB) {
+                vscode.postMessage({ command: 'compareBranches', branchA, branchB });
+            }
+        });
+
+        document.getElementById('swap-branches-btn')?.addEventListener('click', () => {
+            const selectA = document.getElementById('compare-branch-a');
+            const selectB = document.getElementById('compare-branch-b');
+            if (selectA && selectB) {
+                const temp = selectA.value;
+                selectA.value = selectB.value;
+                selectB.value = temp;
+            }
+        });
+
+        window.addEventListener('message', event => {
+            const message = event.data;
+            if (message.command === 'comparisonResult') {
+                const result = message.data;
+                const container = document.getElementById('compare-result');
+                if (!container) return;
+
+                const added = result.files.filter(f => f.status === 'A').length;
+                const modified = result.files.filter(f => f.status === 'M').length;
+                const deleted = result.files.filter(f => f.status === 'D').length;
+
+                container.innerHTML = \`
+                    <div class="compare-stats">
+                        <div class="stat-card">
+                            <div class="stat-value ahead">\${result.ahead}</div>
+                            <div class="stat-label">commits ahead</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value behind">\${result.behind}</div>
+                            <div class="stat-label">commits behind</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">\${result.files.length}</div>
+                            <div class="stat-label">files changed</div>
+                        </div>
+                    </div>
+
+                    <div class="commit-columns">
+                        <div class="commit-column">
+                            <div class="commit-column-header">
+                                <span>Ahead (\${result.commitsA.length})</span>
+                            </div>
+                            \${result.commitsA.length > 0 ? result.commitsA.map(c => \`
+                                <div class="commit-item">
+                                    <div class="commit-hash">\${c.hash}</div>
+                                    <div class="commit-message">\${c.message}</div>
+                                    <div class="commit-meta">
+                                        <span>\${c.author}</span>
+                                        <span>\${c.date}</span>
+                                    </div>
+                                </div>
+                            \`).join('') : '<p class="empty-msg">No commits ahead</p>'}
+                        </div>
+                        <div class="commit-column">
+                            <div class="commit-column-header">
+                                <span>Behind (\${result.commitsB.length})</span>
+                            </div>
+                            \${result.commitsB.length > 0 ? result.commitsB.map(c => \`
+                                <div class="commit-item">
+                                    <div class="commit-hash">\${c.hash}</div>
+                                    <div class="commit-message">\${c.message}</div>
+                                    <div class="commit-meta">
+                                        <span>\${c.author}</span>
+                                        <span>\${c.date}</span>
+                                    </div>
+                                </div>
+                            \`).join('') : '<p class="empty-msg">No commits behind</p>'}
+                        </div>
+                    </div>
+
+                    <details class="file-changes">
+                        <summary class="file-changes-header">
+                            <span>File Changes (\${result.files.length})</span>
+                            <div class="file-stats">
+                                <span class="added">+\${added}</span>
+                                <span class="modified">~\${modified}</span>
+                                <span class="deleted">-\${deleted}</span>
+                            </div>
+                        </summary>
+                        <div class="file-list">
+                            \${result.files.map(f => \`
+                                <div class="file-item">
+                                    <span class="file-status \${f.status}">\${f.status}</span>
+                                    <span>\${f.path}</span>
+                                </div>
+                            \`).join('')}
+                        </div>
+                    </details>
+                \`;
+            }
         });
 
         document.getElementById('sponsor-link')?.addEventListener('click', e => { e.preventDefault(); vscode.postMessage({ command: 'openSponsor' }); });
