@@ -2,6 +2,11 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [1.4.1] - 2025-01-30
+
+### Fixed
+- Search highlights now properly clear when search field is emptied
+
 ## [1.4.0] - 2025-01-30
 
 ### Added

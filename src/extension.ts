@@ -2011,13 +2011,19 @@ function getWebviewContent(
 
                 if (visible) {
                     visibleCount++;
-                    // Update branch name with highlighting
-                    const nameEl = item.querySelector('.branch-name');
-                    if (nameEl && searchState.query && matchResult.match) {
-                        const originalName = decode(branch);
-                        const badges = nameEl.querySelectorAll('.badge');
-                        const badgeHtml = Array.from(badges).map(b => b.outerHTML).join('');
+                }
+
+                // Update branch name with highlighting or restore original
+                const nameEl = item.querySelector('.branch-name');
+                if (nameEl) {
+                    const originalName = decode(branch);
+                    const badges = nameEl.querySelectorAll('.badge');
+                    const badgeHtml = Array.from(badges).map(b => b.outerHTML).join('');
+                    if (searchState.query && matchResult.match && matchResult.indices.length > 0) {
                         nameEl.innerHTML = highlightMatch(originalName, matchResult.indices) + (badgeHtml ? ' ' + badgeHtml : '');
+                    } else {
+                        // Restore original name without highlights
+                        nameEl.innerHTML = originalName + (badgeHtml ? ' ' + badgeHtml : '');
                     }
                 }
             });
