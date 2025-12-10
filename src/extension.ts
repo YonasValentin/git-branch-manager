@@ -419,9 +419,8 @@ function extractIssueFromBranch(branchName: string): string | undefined {
 }
 
 /**
- * Gets comprehensive branch information.
- * @param cwd - Working directory
- * @returns Array of branch information
+ * Retrieves metadata for all local branches including merge status, commit history, and health metrics.
+ * Uses `git for-each-ref` for batch retrieval with fallback to individual queries for compatibility.
  */
 async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
   const branches: BranchInfo[] = [];
@@ -437,6 +436,7 @@ async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
     const protectedBranches = config.get<string[]>('protectedBranches', [
       'main', 'master', 'develop', 'dev', 'staging', 'production',
     ]);
+    const protectedSet = new Set(protectedBranches);
     const daysUntilStale = config.get<number>('daysUntilStale', 30);
 
     const { stdout: mergedBranches } = await exec(
@@ -445,62 +445,108 @@ async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
     );
     const mergedSet = new Set(mergedBranches.trim().split('\n').filter((b) => b));
 
-    const { stdout: localBranches } = await exec('git branch --format="%(refname:short)"', { cwd });
+    // Batch fetch branch metadata via for-each-ref (single git call)
+    const branchDataMap: Map<string, { timestamp: number; author: string; trackingStatus: string }> = new Map();
+    let useBatchRef = true;
 
-    let trackingInfo: Map<string, { remote: string; gone: boolean }> = new Map();
+    try {
+      const { stdout: refOutput } = await exec(
+        `git for-each-ref --format="%(refname:short)|%(committerdate:unix)|%(authorname)|%(upstream:track)" refs/heads/`,
+        { cwd }
+      );
+
+      for (const line of refOutput.trim().split('\n')) {
+        if (!line) continue;
+        const parts = line.split('|');
+        if (parts.length >= 3) {
+          branchDataMap.set(parts[0], {
+            timestamp: parseInt(parts[1]) || 0,
+            author: parts[2] || '',
+            trackingStatus: parts[3] || '',
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('for-each-ref unavailable, using per-branch queries:', err);
+      useBatchRef = false;
+    }
+
+    // Parse tracking info for gone remote detection
+    const trackingInfo: Map<string, { remote: string; gone: boolean }> = new Map();
     try {
       const { stdout: trackingOutput } = await exec('git branch -vv', { cwd });
       for (const line of trackingOutput.split('\n')) {
         const match = line.match(/^\*?\s+(\S+)\s+\S+\s+\[([^\]]+)\]/);
         if (match) {
-          const branchName = match[1];
-          const trackingRef = match[2];
-          const isGone = trackingRef.includes(': gone');
-          trackingInfo.set(branchName, { remote: trackingRef.split(':')[0], gone: isGone });
+          const [, name, ref] = match;
+          trackingInfo.set(name, { remote: ref.split(':')[0], gone: ref.includes(': gone') });
         }
       }
     } catch {}
 
-    for (const branch of localBranches.trim().split('\n')) {
-      if (!branch || protectedBranches.includes(branch)) continue;
+    const { stdout: localBranches } = await exec('git branch --format="%(refname:short)"', { cwd });
+    const branchList = localBranches.trim().split('\n').filter(b => b && !protectedSet.has(b));
 
-      try {
-        const isMerged = mergedSet.has(branch);
+    // Parallel fetch ahead/behind counts for active branches
+    const aheadBehindMap: Map<string, { ahead: number; behind: number }> = new Map();
+    const activeBranches = branchList.filter(b => !mergedSet.has(b) && b !== currentBranch);
 
-        const { stdout: dateStr } = await exec(`git log -1 --format=%ct ${JSON.stringify(branch)}`, { cwd });
-        const timestamp = parseInt(dateStr.trim());
-        const lastCommitDate = new Date(timestamp * 1000);
-        const daysOld = isNaN(timestamp) ? 0 : Math.floor((Date.now() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));
-
-        let ahead = 0, behind = 0;
-        if (!isMerged && branch !== currentBranch) {
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < activeBranches.length; i += BATCH_SIZE) {
+      const batch = activeBranches.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(
+        batch.map(async (branch) => {
           try {
             const { stdout: revList } = await exec(
               `git rev-list --left-right --count ${JSON.stringify(baseBranch)}...${JSON.stringify(branch)}`,
               { cwd }
             );
             const [behindStr, aheadStr] = revList.trim().split('\t');
-            behind = parseInt(behindStr) || 0;
-            ahead = parseInt(aheadStr) || 0;
+            return { branch, behind: parseInt(behindStr) || 0, ahead: parseInt(aheadStr) || 0 };
+          } catch {
+            return { branch, behind: 0, ahead: 0 };
+          }
+        })
+      );
+      results.forEach(r => aheadBehindMap.set(r.branch, { ahead: r.ahead, behind: r.behind }));
+    }
+
+    for (const branch of branchList) {
+      try {
+        const isMerged = mergedSet.has(branch);
+        let timestamp: number;
+        let author: string | undefined;
+
+        if (useBatchRef && branchDataMap.has(branch)) {
+          const data = branchDataMap.get(branch)!;
+          timestamp = data.timestamp;
+          author = data.author || undefined;
+        } else {
+          try {
+            const { stdout: dateStr } = await exec(`git log -1 --format=%ct ${JSON.stringify(branch)}`, { cwd });
+            timestamp = parseInt(dateStr.trim());
+          } catch {
+            timestamp = 0;
+          }
+          try {
+            const { stdout: authorStr } = await exec(`git log -1 --format=%an ${JSON.stringify(branch)}`, { cwd });
+            author = authorStr.trim();
           } catch {}
         }
 
-        let author: string | undefined;
-        try {
-          const { stdout: authorStr } = await exec(`git log -1 --format=%an ${JSON.stringify(branch)}`, { cwd });
-          author = authorStr.trim();
-        } catch {}
-
+        const lastCommitDate = new Date(timestamp * 1000);
+        const daysOld = isNaN(timestamp) || timestamp === 0 ? 0 : Math.floor((Date.now() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));
+        const aheadBehind = aheadBehindMap.get(branch) || { ahead: 0, behind: 0 };
         const tracking = trackingInfo.get(branch);
 
-        const branchInfo: BranchInfo = {
+        const info: BranchInfo = {
           name: branch,
           isMerged,
           lastCommitDate,
           daysOld,
           isCurrentBranch: branch === currentBranch,
-          ahead,
-          behind,
+          ahead: aheadBehind.ahead,
+          behind: aheadBehind.behind,
           author,
           linkedIssue: extractIssueFromBranch(branch),
           hasRemote: !!tracking,
@@ -508,17 +554,17 @@ async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
           trackingBranch: tracking?.remote,
         };
 
-        branchInfo.healthScore = calculateHealthScore(branchInfo, daysUntilStale);
-        branchInfo.healthStatus = getHealthStatus(branchInfo.healthScore);
-        branchInfo.healthReason = getHealthReason(branchInfo);
+        info.healthScore = calculateHealthScore(info, daysUntilStale);
+        info.healthStatus = getHealthStatus(info.healthScore);
+        info.healthReason = getHealthReason(info);
 
-        branches.push(branchInfo);
-      } catch (error) {
-        console.error(`Error getting info for branch ${branch}:`, error);
+        branches.push(info);
+      } catch (err) {
+        console.error(`Failed to process branch ${branch}:`, err);
       }
     }
-  } catch (error) {
-    console.error('Error getting branch info:', error);
+  } catch (err) {
+    console.error('getBranchInfo failed:', err);
     return [];
   }
 
@@ -526,9 +572,8 @@ async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
 }
 
 /**
- * Gets remote branch information for cleanup.
- * @param cwd - Working directory
- * @returns Array of remote branch information
+ * Retrieves remote branch metadata with merge status against the base branch.
+ * Prunes stale remote-tracking refs before fetching.
  */
 async function getRemoteBranchInfo(cwd: string): Promise<RemoteBranchInfo[]> {
   const remoteBranches: RemoteBranchInfo[] = [];
@@ -541,12 +586,33 @@ async function getRemoteBranchInfo(cwd: string): Promise<RemoteBranchInfo[]> {
     const protectedBranches = config.get<string[]>('protectedBranches', [
       'main', 'master', 'develop', 'dev', 'staging', 'production',
     ]);
+    const protectedSet = new Set(protectedBranches);
 
     const { stdout: mergedRemotes } = await exec(
       `git branch -r --merged origin/${baseBranch} --format="%(refname:short)"`,
       { cwd }
     );
     const mergedSet = new Set(mergedRemotes.trim().split('\n').filter((b) => b));
+
+    // Batch fetch remote ref timestamps
+    const remoteDataMap: Map<string, number> = new Map();
+    let useBatchRef = true;
+
+    try {
+      const { stdout: refOutput } = await exec(
+        `git for-each-ref --format="%(refname:short)|%(committerdate:unix)" refs/remotes/`,
+        { cwd }
+      );
+
+      for (const line of refOutput.trim().split('\n')) {
+        if (!line) continue;
+        const [refName, ts] = line.split('|');
+        if (refName) remoteDataMap.set(refName, parseInt(ts) || 0);
+      }
+    } catch (err) {
+      console.warn('for-each-ref unavailable for remotes:', err);
+      useBatchRef = false;
+    }
 
     const { stdout: remotes } = await exec('git branch -r --format="%(refname:short)"', { cwd });
 
@@ -556,16 +622,23 @@ async function getRemoteBranchInfo(cwd: string): Promise<RemoteBranchInfo[]> {
       const [remote, ...nameParts] = remoteBranch.split('/');
       const branchName = nameParts.join('/');
 
-      if (protectedBranches.includes(branchName)) continue;
+      if (protectedSet.has(branchName)) continue;
 
       let daysOld = 0;
       let lastCommitDate: Date | undefined;
-      try {
-        const { stdout: dateStr } = await exec(`git log -1 --format=%ct ${JSON.stringify(remoteBranch)}`, { cwd });
-        const timestamp = parseInt(dateStr.trim());
+
+      if (useBatchRef && remoteDataMap.has(remoteBranch)) {
+        const timestamp = remoteDataMap.get(remoteBranch)!;
         lastCommitDate = new Date(timestamp * 1000);
-        daysOld = isNaN(timestamp) ? 0 : Math.floor((Date.now() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));
-      } catch {}
+        daysOld = timestamp ? Math.floor((Date.now() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+      } else {
+        try {
+          const { stdout: dateStr } = await exec(`git log -1 --format=%ct ${JSON.stringify(remoteBranch)}`, { cwd });
+          const timestamp = parseInt(dateStr.trim());
+          lastCommitDate = new Date(timestamp * 1000);
+          daysOld = isNaN(timestamp) ? 0 : Math.floor((Date.now() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));
+        } catch {}
+      }
 
       remoteBranches.push({
         name: branchName,
@@ -576,8 +649,8 @@ async function getRemoteBranchInfo(cwd: string): Promise<RemoteBranchInfo[]> {
         isGone: false,
       });
     }
-  } catch (error) {
-    console.error('Error getting remote branch info:', error);
+  } catch (err) {
+    console.error('getRemoteBranchInfo failed:', err);
   }
 
   return remoteBranches;
@@ -633,9 +706,8 @@ async function getWorktreeInfo(cwd: string): Promise<WorktreeInfo[]> {
 }
 
 /**
- * Gets all stashes in the repository.
- * @param cwd - Working directory
- * @returns Array of stash information
+ * Retrieves stash entries with file change details.
+ * File lists are fetched in parallel batches to minimize latency.
  */
 async function getStashInfo(cwd: string): Promise<StashInfo[]> {
   const stashes: StashInfo[] = [];
@@ -645,6 +717,7 @@ async function getStashInfo(cwd: string): Promise<StashInfo[]> {
     if (!stdout.trim()) return [];
 
     const lines = stdout.trim().split('\n');
+    const entries: { index: number; message: string; branch: string; date: Date; daysOld: number }[] = [];
 
     for (const line of lines) {
       const parts = line.split('|');
@@ -655,31 +728,46 @@ async function getStashInfo(cwd: string): Promise<StashInfo[]> {
 
       const index = parseInt(refMatch[1]);
       const message = parts[1] || '';
-      const dateStr = parts[2] || '';
-
       const branchMatch = message.match(/^(?:WIP )?[Oo]n ([^:]+):/);
-      const branch = branchMatch ? branchMatch[1] : '';
+      const date = new Date(parts[2] || '');
 
-      const date = new Date(dateStr);
-      const daysOld = Math.floor((Date.now() - date.getTime()) / (1000 * 60 * 60 * 24));
-
-      let filesChanged: number | undefined;
-      try {
-        const { stdout: statOutput } = await exec(`git stash show stash@{${index}} --stat`, { cwd });
-        const fileMatch = statOutput.match(/(\d+) files? changed/);
-        if (fileMatch) filesChanged = parseInt(fileMatch[1]);
-      } catch {}
-
-      let files: string[] = [];
-      try {
-        const { stdout: nameOnly } = await exec(`git stash show stash@{${index}} --name-only`, { cwd });
-        files = nameOnly.trim().split('\n').filter(f => f);
-      } catch {}
-
-      stashes.push({ index, message, branch, date, daysOld, filesChanged, files });
+      entries.push({
+        index,
+        message,
+        branch: branchMatch?.[1] || '',
+        date,
+        daysOld: Math.floor((Date.now() - date.getTime()) / (1000 * 60 * 60 * 24)),
+      });
     }
-  } catch (error) {
-    console.error('Error getting stash info:', error);
+
+    // Parallel file list fetch
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+      const batch = entries.slice(i, i + BATCH_SIZE);
+      const results = await Promise.all(
+        batch.map(async (entry) => {
+          let filesChanged: number | undefined;
+          let files: string[] = [];
+
+          try {
+            const { stdout: nameOnly } = await exec(`git stash show stash@{${entry.index}} --name-only`, { cwd });
+            files = nameOnly.trim().split('\n').filter(Boolean);
+            filesChanged = files.length;
+          } catch {
+            try {
+              const { stdout: stat } = await exec(`git stash show stash@{${entry.index}} --stat`, { cwd });
+              const match = stat.match(/(\d+) files? changed/);
+              if (match) filesChanged = parseInt(match[1]);
+            } catch {}
+          }
+
+          return { ...entry, filesChanged, files };
+        })
+      );
+      stashes.push(...results);
+    }
+  } catch (err) {
+    console.error('getStashInfo failed:', err);
   }
 
   return stashes;
@@ -1471,10 +1559,12 @@ async function showBranchManager(context: vscode.ExtensionContext) {
     return;
   }
 
-  const branches = await getBranchInfo(gitRoot);
-  const remoteBranches = await getRemoteBranchInfo(gitRoot);
-  const worktrees = await getWorktreeInfo(gitRoot);
-  const stashes = await getStashInfo(gitRoot);
+  const [branches, remoteBranches, worktrees, stashes] = await Promise.all([
+    getBranchInfo(gitRoot),
+    getRemoteBranchInfo(gitRoot),
+    getWorktreeInfo(gitRoot),
+    getStashInfo(gitRoot),
+  ]);
   const branchNotes = getBranchNotes(context, gitRoot);
   const cleanupRules = getCleanupRules(context);
 
@@ -1905,10 +1995,12 @@ async function showBranchManager(context: vscode.ExtensionContext) {
 
       async function refreshPanel() {
         const cwd = gitRoot as string;
-        const newBranches = await getBranchInfo(cwd);
-        const newRemotes = await getRemoteBranchInfo(cwd);
-        const newWorktrees = await getWorktreeInfo(cwd);
-        const newStashes = await getStashInfo(cwd);
+        const [newBranches, newRemotes, newWorktrees, newStashes] = await Promise.all([
+          getBranchInfo(cwd),
+          getRemoteBranchInfo(cwd),
+          getWorktreeInfo(cwd),
+          getStashInfo(cwd),
+        ]);
         const newNotes = getBranchNotes(context, cwd);
         const newRules = getCleanupRules(context);
         const newNonce = getNonce();
@@ -1978,36 +2070,64 @@ async function deleteBranch(cwd: string, branchName: string, context?: vscode.Ex
 }
 
 /**
- * Deletes multiple branches.
- * @param cwd - Working directory
- * @param branches - Branches to delete
- * @param context - Extension context
+ * Deletes branches with batch optimization. Falls back to sequential deletion on partial failure.
  */
 async function deleteMultipleBranches(cwd: string, branches: string[], context?: vscode.ExtensionContext) {
+  if (!branches.length) return;
+
   const result = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Deleting branches', cancellable: false },
     async (progress) => {
-      let deleted = 0, failed = 0;
+      let deleted = 0;
+      let failed = 0;
+      const failedBranches: string[] = [];
 
-      for (let i = 0; i < branches.length; i++) {
-        progress.report({ increment: 100 / branches.length, message: branches[i] });
+      if (branches.length > 1) {
+        progress.report({ increment: 50, message: `Deleting ${branches.length} branches...` });
 
         try {
-          await exec(`git branch -D -- ${JSON.stringify(branches[i])}`, { cwd });
-          deleted++;
-        } catch {
-          failed++;
+          const args = branches.map(b => JSON.stringify(b)).join(' ');
+          await exec(`git branch -D -- ${args}`, { cwd });
+          deleted = branches.length;
+          progress.report({ increment: 50, message: 'Done' });
+        } catch (err: any) {
+          // Batch failed, fall back to sequential for accurate error tracking
+          console.warn('Batch delete failed:', err.message);
+
+          for (let i = 0; i < branches.length; i++) {
+            progress.report({ increment: 50 / branches.length, message: branches[i] });
+            try {
+              await exec(`git branch -D -- ${JSON.stringify(branches[i])}`, { cwd });
+              deleted++;
+            } catch {
+              failed++;
+              failedBranches.push(branches[i]);
+            }
+          }
         }
+      } else {
+        progress.report({ increment: 50, message: branches[0] });
+        try {
+          await exec(`git branch -D -- ${JSON.stringify(branches[0])}`, { cwd });
+          deleted = 1;
+        } catch {
+          failed = 1;
+          failedBranches.push(branches[0]);
+        }
+        progress.report({ increment: 50, message: 'Done' });
       }
 
-      return { deleted, failed };
+      return { deleted, failed, failedBranches };
     }
   );
 
   if (result.failed === 0) {
     vscode.window.showInformationMessage(`Deleted ${result.deleted} branch${result.deleted > 1 ? 'es' : ''}`);
   } else {
-    vscode.window.showWarningMessage(`Deleted ${result.deleted}, failed ${result.failed}`);
+    const failedList = result.failedBranches.length <= 3
+      ? result.failedBranches.join(', ')
+      : `${result.failedBranches.slice(0, 3).join(', ')}...`;
+    vscode.window.showWarningMessage(`Deleted ${result.deleted}, failed ${result.failed}: ${failedList}`);
   }
 
   if (context && result.deleted > 0) {

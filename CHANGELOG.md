@@ -2,6 +2,21 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [1.7.0] - 2025-12-10
+
+### Performance
+- Dramatically improved panel load time using `git for-each-ref` batch queries
+- Branch metadata (date, author) now fetched in a single git call instead of per-branch
+- Remote branch timestamps retrieved via batch ref lookup
+- Ahead/behind counts fetched in parallel with configurable batch size
+- Stash file details loaded concurrently
+- Panel data (branches, remotes, worktrees, stashes) fetched in parallel
+- Batch branch deletion: multiple branches deleted in single git command
+
+### Changed
+- Refactored data fetching functions for better maintainability
+- Improved error handling with automatic fallback to legacy per-branch queries
+
 ## [1.6.0] - 2025-01-30
 
 ### Added
