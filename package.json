@@ -2,12 +2,15 @@
   "name": "git-branch-manager-pro",
   "displayName": "Git Branch Manager - Clean & Organize",
   "description": "Clean up old and merged Git branches with one click. Dashboard view, bulk delete, branch templates.",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "publisher": "yonasvalentinmougaardkristensen",
   "engines": {
     "vscode": "^1.74.0"
   },
-  "categories": ["SCM Providers", "Other"],
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
   "keywords": [
     "git",
     "branch",
@@ -163,7 +166,14 @@
         },
         "gitBranchManager.protectedBranches": {
           "type": "array",
-          "default": ["main", "master", "develop", "dev", "staging", "production"],
+          "default": [
+            "main",
+            "master",
+            "develop",
+            "dev",
+            "staging",
+            "production"
+          ],
           "description": "Branches that should never be deleted"
         },
         "gitBranchManager.confirmBeforeDelete": {

@@ -2,6 +2,13 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [1.7.1] - 2025-12-10
+
+### Added
+- GitHub Sponsors integration with dismissable banner in dashboard
+- FUNDING.yml for repository sponsor button
+- Updated README with sponsor section
+
 ## [1.7.0] - 2025-12-10
 
 ### Performance
