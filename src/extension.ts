@@ -1611,7 +1611,8 @@ async function showBranchManager(context: vscode.ExtensionContext) {
   );
 
   const nonce = getNonce();
-  panel.webview.html = getWebviewContent(branches, remoteBranches, worktrees, stashes, protectedBranches, panel.webview.cspSource, nonce, branchNotes, cleanupRules);
+  const showSponsorBanner = !context.globalState.get<boolean>('sponsorBannerDismissed', false);
+  panel.webview.html = getWebviewContent(branches, remoteBranches, worktrees, stashes, protectedBranches, panel.webview.cspSource, nonce, branchNotes, cleanupRules, showSponsorBanner);
 
   panel.webview.onDidReceiveMessage(
     async (message) => {
@@ -1686,6 +1687,10 @@ async function showBranchManager(context: vscode.ExtensionContext) {
 
         case 'openSponsor':
           vscode.env.openExternal(vscode.Uri.parse('https://github.com/sponsors/YonasValentin'));
+          break;
+
+        case 'dismissSponsor':
+          context.globalState.update('sponsorBannerDismissed', true);
           break;
 
         case 'switchBranch':
@@ -2004,7 +2009,8 @@ async function showBranchManager(context: vscode.ExtensionContext) {
         const newNotes = getBranchNotes(context, cwd);
         const newRules = getCleanupRules(context);
         const newNonce = getNonce();
-        panel.webview.html = getWebviewContent(newBranches, newRemotes, newWorktrees, newStashes, protectedBranches, panel.webview.cspSource, newNonce, newNotes, newRules);
+        const showBanner = !context.globalState.get<boolean>('sponsorBannerDismissed', false);
+        panel.webview.html = getWebviewContent(newBranches, newRemotes, newWorktrees, newStashes, protectedBranches, panel.webview.cspSource, newNonce, newNotes, newRules, showBanner);
         await updateGlobalStatusBar();
       }
     },
@@ -2236,7 +2242,8 @@ function getWebviewContent(
   cspSource: string,
   nonce: string,
   branchNotes: Map<string, BranchNote> = new Map(),
-  cleanupRules: CleanupRule[] = []
+  cleanupRules: CleanupRule[] = [],
+  showSponsorBanner: boolean = true
 ): string {
   const config = vscode.workspace.getConfiguration('gitBranchManager');
   const daysUntilStale = config.get<number>('daysUntilStale', 30);
@@ -2297,7 +2304,11 @@ function getWebviewContent(
         details.protected { margin-top: 16px; font-size: 11px; opacity: 0.6; }
         details.protected summary { cursor: pointer; }
         details.protected p { margin: 8px 0 0 0; }
-        .footer { margin-top: 16px; font-size: 11px; opacity: 0.5; display: flex; gap: 12px; }
+        .sponsor-banner { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-top: 16px; background: var(--vscode-inputValidation-infoBackground); border: 1px solid var(--vscode-inputValidation-infoBorder); border-radius: 4px; font-size: 12px; }
+        .sponsor-banner a { color: var(--vscode-textLink-foreground); font-weight: 500; }
+        .sponsor-dismiss { background: none; border: none; color: var(--vscode-foreground); opacity: 0.6; cursor: pointer; margin-left: auto; padding: 0 4px; font-size: 16px; }
+        .sponsor-dismiss:hover { opacity: 1; }
+        .footer { margin-top: 12px; font-size: 11px; opacity: 0.5; display: flex; gap: 12px; }
         .footer a { color: var(--vscode-textLink-foreground); text-decoration: none; }
         .footer a:hover { text-decoration: underline; }
         input[type="checkbox"] { width: 14px; height: 14px; cursor: pointer; }
@@ -2738,6 +2749,12 @@ function getWebviewContent(
     </details>
     ` : ''}
 
+    ${showSponsorBanner ? `<div class="sponsor-banner" id="sponsor-banner">
+        <span>Find this useful?</span>
+        <a href="#" id="sponsor-banner-link">Sponsor on GitHub</a>
+        <button class="sponsor-dismiss" id="sponsor-dismiss" title="Dismiss">×</button>
+    </div>` : ''}
+
     <div class="footer">
         <a href="#" id="sponsor-link">Sponsor</a>
         <a href="#" id="coffee-link">Buy Me a Coffee</a>
@@ -3152,6 +3169,11 @@ function getWebviewContent(
         });
 
         document.getElementById('sponsor-link')?.addEventListener('click', e => { e.preventDefault(); vscode.postMessage({ command: 'openSponsor' }); });
+        document.getElementById('sponsor-banner-link')?.addEventListener('click', e => { e.preventDefault(); vscode.postMessage({ command: 'openSponsor' }); });
+        document.getElementById('sponsor-dismiss')?.addEventListener('click', () => {
+            document.getElementById('sponsor-banner')?.remove();
+            vscode.postMessage({ command: 'dismissSponsor' });
+        });
         document.getElementById('coffee-link')?.addEventListener('click', e => { e.preventDefault(); vscode.postMessage({ command: 'openSupport' }); });
         document.getElementById('github-link')?.addEventListener('click', e => { e.preventDefault(); vscode.postMessage({ command: 'openGithub' }); });
 
@@ -3339,14 +3361,14 @@ async function showSupportMessage(context: vscode.ExtensionContext) {
   const usageCount = context.globalState.get<number>('usageCount', 0);
 
   const result = await vscode.window.showInformationMessage(
-    `You've used Git Branch Manager ${usageCount} times. Your support helps fund development.`,
-    'Support Development',
+    `You've used Git Branch Manager ${usageCount} times. Consider sponsoring to support development.`,
+    'Sponsor on GitHub',
     'Maybe Later',
     "Don't Show Again"
   );
 
-  if (result === 'Support Development') {
-    vscode.env.openExternal(vscode.Uri.parse('https://www.buymeacoffee.com/YonasValentin'));
+  if (result === 'Sponsor on GitHub') {
+    vscode.env.openExternal(vscode.Uri.parse('https://github.com/sponsors/YonasValentin'));
     context.globalState.update('hasShownSupportMessage', true);
   } else if (result === "Don't Show Again") {
     context.globalState.update('hasShownSupportMessage', true);

@@ -5,6 +5,8 @@
 [![Rating](https://img.shields.io/visual-studio-marketplace/r/YonasValentinMougaardKristensen.git-branch-manager-pro)](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro)
 [![Sponsor](https://img.shields.io/github/sponsors/YonasValentin?label=Sponsor&logo=github)](https://github.com/sponsors/YonasValentin)
 
+> **Love this extension?** [Become a sponsor](https://github.com/sponsors/YonasValentin) to support ongoing development and new features.
+
 **Stop manually deleting old branches.** This extension shows you which branches are merged or stale, and lets you clean them up with one click.
 
 ## Features
@@ -109,13 +111,26 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ---
 
-## Support
+## Support Development
 
-If this extension saves you time, consider:
-- [Leaving a review](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro&ssr=false#review-details) - helps others find it
-- [Buying me a coffee](https://www.buymeacoffee.com/YonasValentin) - fuels development
+This extension is free and open source. If it saves you time, consider supporting its development:
 
-[![Buy Me a Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/YonasValentin)
+### Sponsor on GitHub (Recommended)
+GitHub Sponsors is the best way to support ongoing development. Sponsors get priority support and help fund new features.
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/YonasValentin)
+
+### Other ways to help
+- [Leave a review](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro&ssr=false#review-details) — helps others discover the extension
+- [Report issues](https://github.com/yonasvalentin/git-branch-manager-pro/issues) — help improve quality
+- [Buy me a coffee](https://www.buymeacoffee.com/YonasValentin) — one-time support
+
+<a href="https://github.com/sponsors/YonasValentin">
+  <img src="https://img.shields.io/badge/Sponsor_on_GitHub-30363D?style=for-the-badge&logo=github-sponsors&logoColor=EA4AAA" alt="Sponsor on GitHub" />
+</a>
+<a href="https://www.buymeacoffee.com/YonasValentin">
+  <img src="https://img.shields.io/badge/Buy_Me_A_Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee" />
+</a>
 
 ---
 
