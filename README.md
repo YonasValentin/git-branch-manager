@@ -1,4 +1,4 @@
-# Git Branch Manager
+# Git Branch Manager - Clean & Organize
 
 [![Version](https://img.shields.io/visual-studio-marketplace/v/YonasValentinMougaardKristensen.git-branch-manager-pro)](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro)
 [![Installs](https://img.shields.io/visual-studio-marketplace/i/YonasValentinMougaardKristensen.git-branch-manager-pro)](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro)
@@ -7,93 +7,114 @@
 
 > **Love this extension?** [Become a sponsor](https://github.com/sponsors/YonasValentin) to support ongoing development and new features.
 
-**Stop manually deleting old branches.** This extension shows you which branches are merged or stale, and lets you clean them up with one click.
+---
 
-## Features
+## Stop Wasting Time on Branch Cleanup
 
-### Branch Health Scoring
-Every branch gets a health score (0-100) based on merge status, age, remote tracking, and commits behind. Instantly see which branches need attention.
+How many old branches are cluttering your repository right now? **Git Branch Manager** gives you a complete dashboard to visualize, organize, and clean up your Git branches in seconds.
 
-### Local Branch Management
-- Dashboard showing all branches organized by status (merged, stale, orphaned, active)
-- Bulk delete operations with confirmation
-- Branch templates for consistent naming
+![Git Branch Manager Dashboard](media/screenshot-dashboard.png)
 
-### Remote Branch Management
-- View and clean merged remote branches
-- Prune stale remote references
-- Identify orphaned local branches (remote deleted)
+### Why Developers Love It
 
-### Git Worktree Integration
-- List all worktrees in your repository
-- Create new worktrees from any branch
-- Open worktrees in new VS Code windows
-- Lock/unlock and remove worktrees
+- **Branch Health Scoring** — Every branch gets a score (0-100) so you instantly know what needs attention
+- **One-Click Cleanup** — Select multiple branches and delete them all at once
+- **Smart Detection** — Automatically identifies merged, stale, and orphaned branches
+- **Protected Branches** — Your main branches are always safe from accidental deletion
+
+---
+
+## Features at a Glance
+
+### Branch Dashboard
+See all your branches organized by status: **Merged**, **Stale**, **Orphaned**, and **Active**. Each branch shows its age, commit count, and health score.
 
 ### Stash Management
-- View all stashes with file count and age
-- Create stashes (with or without untracked files)
-- Apply, pop, or drop individual stashes
-- Clear all stashes with confirmation
+Never lose work again. View, apply, pop, or drop stashes with a clean interface.
+
+![Stash Management](media/screenshot-tools.png)
+
+### Worktree Support
+Work on multiple branches simultaneously without stashing. Create, open, and manage Git worktrees directly from VS Code.
+
+### Branch Templates
+Create branches with consistent naming conventions:
+- `feature/add-user-auth`
+- `bugfix/fix-login-error`
+- `hotfix/critical-payment-fix`
+
+---
 
 ## Quick Start
 
-1. Install the extension
-2. Click the branch icon in your status bar, or run `Git Branch Manager: Show Branch Cleaner`
-3. Use the tabs to navigate: Local, Remote, Worktrees, Stashes
-4. Clean up what you don't need
+1. **Install** the extension from VS Code Marketplace
+2. **Open** a Git repository in VS Code
+3. **Click** the branch icon in your status bar (or run `Git Branch Manager: Show Branch Cleaner`)
+4. **Clean up** merged and stale branches with one click
 
-**Keyboard shortcuts:**
-- `Cmd+Shift+G Cmd+Shift+C` (Mac) / `Ctrl+Shift+G Ctrl+Shift+C` (Windows) - Open dashboard
-- `Cmd+Shift+G Cmd+Shift+N` (Mac) / `Ctrl+Shift+G Ctrl+Shift+N` (Windows) - Create branch from template
+**Keyboard Shortcuts:**
+| Action | Mac | Windows/Linux |
+|--------|-----|---------------|
+| Open Dashboard | `Cmd+Shift+G Cmd+Shift+C` | `Ctrl+Shift+G Ctrl+Shift+C` |
+| Create Branch | `Cmd+Shift+G Cmd+Shift+N` | `Ctrl+Shift+G Ctrl+Shift+N` |
 
-## Commands
+---
+
+## All Commands
 
 | Command | Description |
 |---------|-------------|
 | `Git Branch Manager: Show Branch Cleaner` | Open the main dashboard |
-| `Git Branch Manager: Quick Clean Merged Branches` | Delete all merged branches |
-| `Git Branch Manager: Create Branch from Template` | Create a new branch using templates |
+| `Git Branch Manager: Quick Clean Merged Branches` | Delete all merged branches instantly |
+| `Git Branch Manager: Create Branch from Template` | Create a branch with consistent naming |
 | `Git Branch Manager: Clean Remote Branches` | Clean merged remote branches |
-| `Git Branch Manager: Manage Worktrees` | View and manage worktrees |
-| `Git Branch Manager: Create Worktree` | Create a worktree from a branch |
+| `Git Branch Manager: Manage Worktrees` | View and manage Git worktrees |
+| `Git Branch Manager: Create Worktree` | Create a worktree from any branch |
 | `Git Branch Manager: Quick Stash` | Stash current changes |
-| `Git Branch Manager: Pop Latest Stash` | Pop the most recent stash |
+| `Git Branch Manager: Pop Latest Stash` | Apply and remove the latest stash |
 
-## Branch Templates
+---
 
-Create branches with consistent naming:
+## Configuration
 
-| Template | Pattern | Example |
-|----------|---------|---------|
-| Feature | `feature/{description}` | `feature/add-user-auth` |
-| Bugfix | `bugfix/{description}` | `bugfix/fix-login-error` |
-| Hotfix | `hotfix/{description}` | `hotfix/critical-payment-fix` |
-| Release | `release/{version}` | `release/v1.2.0` |
-| Experiment | `exp/{description}` | `exp/new-algorithm` |
-
-## Settings
+Customize the extension to fit your workflow:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `gitBranchManager.daysUntilStale` | `30` | Days before a branch is flagged as stale |
-| `gitBranchManager.protectedBranches` | `["main", "master", "develop", "dev", "staging", "production"]` | Branches that will never be suggested for deletion |
-| `gitBranchManager.confirmBeforeDelete` | `true` | Show confirmation dialog before deleting |
-| `gitBranchManager.showNotifications` | `true` | Show notifications when branches need cleanup |
+| `gitBranchManager.protectedBranches` | `["main", "master", "develop", "dev", "staging", "production"]` | Branches that can never be deleted |
+| `gitBranchManager.confirmBeforeDelete` | `true` | Show confirmation before deleting |
+| `gitBranchManager.showNotifications` | `true` | Notify when branches need cleanup |
 
-## FAQ
+---
 
-**Does this delete remote branches?**
-Yes, but only through the Remote tab with explicit confirmation. Local deletions don't affect your remote.
+## Frequently Asked Questions
 
-**Can I undo a deletion?**
-Git doesn't make branch deletion easily reversible. That's why the extension shows confirmation dialogs. If you need to recover a deleted branch, use `git reflog` to find the commit and recreate it.
+<details>
+<summary><strong>Does this delete remote branches?</strong></summary>
 
-**Why doesn't my branch show up?**
-Protected branches (main, master, develop, etc.) are hidden from the cleanup list. You can customize this in settings.
+Only through the **Remote** tab with explicit confirmation. Local deletions never affect your remote repository.
+</details>
 
-**What are orphaned branches?**
-Local branches whose remote tracking branch has been deleted. These are safe to clean up.
+<details>
+<summary><strong>Can I undo a branch deletion?</strong></summary>
+
+Git doesn't make branch deletion easily reversible—that's why we show confirmation dialogs. If you need to recover a deleted branch, use `git reflog` to find the commit and recreate it.
+</details>
+
+<details>
+<summary><strong>Why doesn't my branch show up?</strong></summary>
+
+Protected branches (main, master, develop, etc.) are hidden from the cleanup list. You can customize protected branches in settings.
+</details>
+
+<details>
+<summary><strong>What are orphaned branches?</strong></summary>
+
+Local branches whose remote tracking branch has been deleted. These are usually safe to clean up.
+</details>
+
+---
 
 ## Requirements
 
@@ -101,9 +122,13 @@ Local branches whose remote tracking branch has been deleted. These are safe to 
 - Git installed and accessible from command line
 - An open Git repository
 
+---
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for version history.
+
+---
 
 ## Found a Bug?
 
@@ -113,14 +138,14 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## Support Development
 
-This extension is free and open source. If it saves you time, consider supporting its development:
+This extension is **free and open source**. If it saves you time, consider supporting its development:
 
 ### Sponsor on GitHub (Recommended)
 GitHub Sponsors is the best way to support ongoing development. Sponsors get priority support and help fund new features.
 
 [![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/YonasValentin)
 
-### Other ways to help
+### Other Ways to Help
 - [Leave a review](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro&ssr=false#review-details) — helps others discover the extension
 - [Report issues](https://github.com/yonasvalentin/git-branch-manager-pro/issues) — help improve quality
 - [Buy me a coffee](https://www.buymeacoffee.com/YonasValentin) — one-time support
