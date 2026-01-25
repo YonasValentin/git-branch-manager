@@ -1,0 +1,347 @@
+import * as vscode from 'vscode';
+import { getGitRoot, getBranchInfo, exec } from '../git';
+import { BRANCH_TEMPLATES } from '../constants';
+
+/**
+ * Creates a branch from a template.
+ */
+export async function createBranchFromTemplate(): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    vscode.window.showErrorMessage('Not in a Git repository');
+    return;
+  }
+
+  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
+  if (!gitRoot) {
+    vscode.window.showErrorMessage('Not in a Git repository');
+    return;
+  }
+
+  try {
+    await exec('git log -1', { cwd: gitRoot });
+  } catch {
+    await vscode.window.showErrorMessage(
+      'Cannot create a branch: Your repository has no commits yet.',
+      'OK'
+    );
+    return;
+  }
+
+  const selected = await vscode.window.showQuickPick(
+    BRANCH_TEMPLATES.map((t) => ({
+      label: t.name,
+      description: t.pattern,
+      detail: `Example: ${t.example}`,
+      template: t,
+    })),
+    { placeHolder: 'Select a branch template', matchOnDescription: true }
+  );
+
+  if (!selected) return;
+
+  const description = await vscode.window.showInputBox({
+    prompt: `Enter ${selected.template.pattern.includes('version') ? 'version' : 'description'}`,
+    placeHolder: selected.template.pattern.includes('version') ? 'v1.2.0' : 'brief-description',
+    validateInput: (value) => {
+      if (!value) return 'Value is required';
+      if (value.includes(' ') && !selected.template.pattern.includes('version')) {
+        return 'Use hyphens instead of spaces';
+      }
+      return null;
+    },
+  });
+
+  if (!description) return;
+
+  const branchName = selected.template.pattern
+    .replace('{description}', description)
+    .replace('{version}', description);
+
+  try {
+    await exec(`git checkout -b ${JSON.stringify(branchName)}`, { cwd: gitRoot });
+    vscode.window.showInformationMessage(`Created branch: ${branchName}`);
+    if (updateStatusBar) {
+      await updateStatusBar();
+    }
+  } catch (error: any) {
+    if (error.message.includes('already exists')) {
+      vscode.window.showErrorMessage(`Branch '${branchName}' already exists`);
+    } else {
+      vscode.window.showErrorMessage(`Failed to create branch: ${error.message}`);
+    }
+  }
+}
+
+/**
+ * Quick cleanup of merged branches.
+ * @param context - Extension context
+ * @param updateStatusBar - Optional callback to update status bar
+ */
+export async function quickCleanup(
+  context?: vscode.ExtensionContext,
+  updateStatusBar?: () => Promise<void>
+): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    vscode.window.showErrorMessage('Not in a Git repository');
+    return;
+  }
+
+  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
+  if (!gitRoot) {
+    vscode.window.showErrorMessage('Not in a Git repository');
+    return;
+  }
+
+  const branches = await getBranchInfo(gitRoot);
+  const toDelete = branches.filter((b) => !b.isCurrentBranch && b.isMerged);
+
+  if (toDelete.length === 0) {
+    vscode.window.showInformationMessage('No merged branches to clean up.');
+    return;
+  }
+
+  const message = `Delete ${toDelete.length} merged branch${toDelete.length > 1 ? 'es' : ''}?\n\n` +
+    toDelete.map((b) => `• ${b.name}`).join('\n');
+
+  const result = await vscode.window.showWarningMessage(message, { modal: true }, 'Delete All', 'View Details');
+
+  if (result === 'Delete All') {
+    await deleteMultipleBranches(gitRoot, toDelete.map((b) => b.name), context);
+    if (context && toDelete.length > 0) {
+      const usageCount = context.globalState.get<number>('usageCount', 0);
+      context.globalState.update('usageCount', usageCount + 1);
+    }
+    if (updateStatusBar) {
+      await updateStatusBar();
+    }
+  } else if (result === 'View Details') {
+    vscode.commands.executeCommand('git-branch-manager.cleanup');
+  }
+}
+
+/**
+ * Switch to a branch.
+ * @param cwd - Working directory
+ * @param branchName - Branch to switch to
+ */
+export async function switchBranch(cwd: string, branchName: string): Promise<void> {
+  const result = await vscode.window.showQuickPick(['Yes', 'No'], {
+    placeHolder: `Switch to branch "${branchName}"?`,
+  });
+
+  if (result !== 'Yes') return;
+
+  try {
+    await exec(`git checkout ${JSON.stringify(branchName)}`, { cwd });
+    vscode.window.showInformationMessage(`Switched to branch: ${branchName}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`Failed to switch branch: ${error.message}`);
+  }
+}
+
+/**
+ * Deletes a single branch.
+ * @param cwd - Working directory
+ * @param branchName - Branch to delete
+ * @param context - Extension context
+ * @returns Success status
+ */
+export async function deleteBranch(cwd: string, branchName: string, context?: vscode.ExtensionContext): Promise<boolean> {
+  const config = vscode.workspace.getConfiguration('gitBranchManager');
+  const confirmBeforeDelete = config.get<boolean>('confirmBeforeDelete', true);
+
+  if (confirmBeforeDelete) {
+    const result = await vscode.window.showWarningMessage(
+      `Delete branch "${branchName}"?`,
+      { modal: true },
+      'Delete',
+      'Cancel'
+    );
+    if (result !== 'Delete') return false;
+  }
+
+  try {
+    await exec(`git branch -D -- ${JSON.stringify(branchName)}`, { cwd });
+    vscode.window.showInformationMessage(`Deleted branch: ${branchName}`);
+
+    if (context) {
+      const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
+      context.globalState.update('totalBranchesDeleted', totalDeleted + 1);
+    }
+    return true;
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`Failed to delete branch ${branchName}: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Deletes branches with batch optimization. Falls back to sequential deletion on partial failure.
+ * @param cwd - Working directory
+ * @param branches - Branches to delete
+ * @param context - Extension context
+ */
+export async function deleteMultipleBranches(cwd: string, branches: string[], context?: vscode.ExtensionContext): Promise<void> {
+  if (!branches.length) return;
+
+  const result = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'Deleting branches', cancellable: false },
+    async (progress) => {
+      let deleted = 0;
+      let failed = 0;
+      const failedBranches: string[] = [];
+
+      if (branches.length > 1) {
+        progress.report({ increment: 50, message: `Deleting ${branches.length} branches...` });
+
+        try {
+          const args = branches.map(b => JSON.stringify(b)).join(' ');
+          await exec(`git branch -D -- ${args}`, { cwd });
+          deleted = branches.length;
+          progress.report({ increment: 50, message: 'Done' });
+        } catch (err: any) {
+          // Batch failed, fall back to sequential for accurate error tracking
+          console.warn('Batch delete failed:', err.message);
+
+          for (let i = 0; i < branches.length; i++) {
+            progress.report({ increment: 50 / branches.length, message: branches[i] });
+            try {
+              await exec(`git branch -D -- ${JSON.stringify(branches[i])}`, { cwd });
+              deleted++;
+            } catch {
+              failed++;
+              failedBranches.push(branches[i]);
+            }
+          }
+        }
+      } else {
+        progress.report({ increment: 50, message: branches[0] });
+        try {
+          await exec(`git branch -D -- ${JSON.stringify(branches[0])}`, { cwd });
+          deleted = 1;
+        } catch {
+          failed = 1;
+          failedBranches.push(branches[0]);
+        }
+        progress.report({ increment: 50, message: 'Done' });
+      }
+
+      return { deleted, failed, failedBranches };
+    }
+  );
+
+  if (result.failed === 0) {
+    vscode.window.showInformationMessage(`Deleted ${result.deleted} branch${result.deleted > 1 ? 'es' : ''}`);
+  } else {
+    const failedList = result.failedBranches.length <= 3
+      ? result.failedBranches.join(', ')
+      : `${result.failedBranches.slice(0, 3).join(', ')}...`;
+    vscode.window.showWarningMessage(`Deleted ${result.deleted}, failed ${result.failed}: ${failedList}`);
+  }
+
+  if (context && result.deleted > 0) {
+    const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
+    const successfulCleanups = context.globalState.get<number>('successfulCleanups', 0);
+
+    context.globalState.update('totalBranchesDeleted', totalDeleted + result.deleted);
+    context.globalState.update('successfulCleanups', successfulCleanups + 1);
+
+    await checkAndShowReviewRequest(context);
+  }
+}
+
+/**
+ * Checks branch health and shows notifications.
+ */
+export async function checkBranchHealth(): Promise<void> {
+  const config = vscode.workspace.getConfiguration('gitBranchManager');
+  if (!config.get('showNotifications', true)) return;
+
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) return;
+
+  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
+  if (!gitRoot) return;
+
+  const branches = await getBranchInfo(gitRoot);
+  const daysUntilStale = config.get<number>('daysUntilStale', 30);
+  const cleanupCandidates = branches.filter(
+    (b) => !b.isCurrentBranch && (b.isMerged || b.daysOld > daysUntilStale || b.remoteGone)
+  );
+
+  if (cleanupCandidates.length >= 5) {
+    const dangerCount = cleanupCandidates.filter((b) => b.healthStatus === 'danger').length;
+    const message = dangerCount > 0
+      ? `${cleanupCandidates.length} branches need cleanup (${dangerCount} critical)`
+      : `${cleanupCandidates.length} branches could be cleaned up`;
+
+    const result = await vscode.window.showInformationMessage(
+      message,
+      'Clean Now',
+      'View Details',
+      "Don't Show Again"
+    );
+
+    if (result === 'Clean Now') {
+      vscode.commands.executeCommand('git-branch-manager.quickCleanup');
+    } else if (result === 'View Details') {
+      vscode.commands.executeCommand('git-branch-manager.cleanup');
+    } else if (result === "Don't Show Again") {
+      config.update('showNotifications', false, true);
+    }
+  }
+}
+
+/**
+ * Checks and shows review request based on usage.
+ */
+async function checkAndShowReviewRequest(context: vscode.ExtensionContext): Promise<void> {
+  const hasReviewed = context.globalState.get<boolean>('hasReviewed', false);
+  const reviewRequestCount = context.globalState.get<number>('reviewRequestCount', 0);
+  const lastReviewRequestDate = context.globalState.get<number>('lastReviewRequestDate', 0);
+  const totalBranchesDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
+  const successfulCleanups = context.globalState.get<number>('successfulCleanups', 0);
+
+  if (hasReviewed || reviewRequestCount >= 3) return;
+
+  const daysSinceLastRequest = (Date.now() - lastReviewRequestDate) / (1000 * 60 * 60 * 24);
+
+  const shouldShowReview =
+    (reviewRequestCount === 0 && (successfulCleanups >= 5 || totalBranchesDeleted >= 20)) ||
+    (reviewRequestCount === 1 && successfulCleanups >= 10 && daysSinceLastRequest > 30) ||
+    (reviewRequestCount === 2 && successfulCleanups >= 20 && daysSinceLastRequest > 60);
+
+  if (shouldShowReview) {
+    setTimeout(() => showReviewRequest(context), 2000);
+  }
+}
+
+/**
+ * Shows review request dialog.
+ */
+async function showReviewRequest(context: vscode.ExtensionContext): Promise<void> {
+  const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
+
+  const result = await vscode.window.showInformationMessage(
+    `You've cleaned ${totalDeleted} branches. If this helps, a review helps others find it.`,
+    'Leave a Review',
+    'Maybe Later',
+    "Don't Ask Again"
+  );
+
+  const reviewRequestCount = context.globalState.get<number>('reviewRequestCount', 0);
+
+  if (result === 'Leave a Review') {
+    const extensionId = 'YonasValentinMougaardKristensen.git-branch-manager-pro';
+    vscode.env.openExternal(vscode.Uri.parse(`https://marketplace.visualstudio.com/items?itemName=${extensionId}&ssr=false#review-details`));
+    context.globalState.update('hasReviewed', true);
+  } else if (result === "Don't Ask Again") {
+    context.globalState.update('hasReviewed', true);
+  } else {
+    context.globalState.update('reviewRequestCount', reviewRequestCount + 1);
+  }
+
+  context.globalState.update('lastReviewRequestDate', Date.now());
+}
