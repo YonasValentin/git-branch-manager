@@ -6,7 +6,13 @@ import { formatAge } from '../utils';
  * Creates a worktree from a branch.
  */
 export async function createWorktreeFromBranch(): Promise<void> {
-  const gitRoot = await getGitRoot();
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    vscode.window.showErrorMessage('Not in a Git repository');
+    return;
+  }
+
+  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
   if (!gitRoot) {
     vscode.window.showErrorMessage('Not in a Git repository');
     return;
@@ -60,7 +66,13 @@ export async function createWorktreeFromBranch(): Promise<void> {
  * @param context - Extension context
  */
 export async function showWorktreeManager(context: vscode.ExtensionContext): Promise<void> {
-  const gitRoot = await getGitRoot();
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    vscode.window.showErrorMessage('Not in a Git repository');
+    return;
+  }
+
+  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
   if (!gitRoot) {
     vscode.window.showErrorMessage('Not in a Git repository');
     return;

@@ -61,9 +61,6 @@ export async function createBranchFromTemplate(): Promise<void> {
   try {
     await exec(`git checkout -b ${JSON.stringify(branchName)}`, { cwd: gitRoot });
     vscode.window.showInformationMessage(`Created branch: ${branchName}`);
-    if (updateStatusBar) {
-      await updateStatusBar();
-    }
   } catch (error: any) {
     if (error.message.includes('already exists')) {
       vscode.window.showErrorMessage(`Branch '${branchName}' already exists`);

@@ -6,7 +6,13 @@ import { getGitRoot, getStashInfo, createStash, popStash } from '../git';
  * @param updateStatusBar - Optional callback to update status bar
  */
 export async function quickStash(updateStatusBar?: () => Promise<void>): Promise<void> {
-  const gitRoot = await getGitRoot();
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    vscode.window.showErrorMessage('Not in a Git repository');
+    return;
+  }
+
+  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
   if (!gitRoot) {
     vscode.window.showErrorMessage('Not in a Git repository');
     return;
@@ -53,7 +59,13 @@ export async function quickStash(updateStatusBar?: () => Promise<void>): Promise
  * @param updateStatusBar - Optional callback to update status bar
  */
 export async function quickStashPop(updateStatusBar?: () => Promise<void>): Promise<void> {
-  const gitRoot = await getGitRoot();
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    vscode.window.showErrorMessage('Not in a Git repository');
+    return;
+  }
+
+  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
   if (!gitRoot) {
     vscode.window.showErrorMessage('Not in a Git repository');
     return;
