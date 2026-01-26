@@ -154,3 +154,20 @@ export interface CleanupRule {
   };
   action: 'delete' | 'archive' | 'notify';
 }
+
+/**
+ * Entry in the recovery log for deleted branches.
+ * Stores all information needed to restore a branch.
+ */
+export interface DeletedBranchEntry {
+  /** Original branch name */
+  branchName: string;
+  /** Commit hash the branch pointed to at deletion time */
+  commitHash: string;
+  /** Unix timestamp of deletion */
+  deletedAt: number;
+  /** Optional: who deleted it (for multi-user scenarios) */
+  deletedBy?: string;
+  /** Optional: reason or note about deletion */
+  reason?: string;
+}
