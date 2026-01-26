@@ -99,6 +99,10 @@
       {
         "command": "git-branch-manager.stashPop",
         "title": "Git Branch Manager: Pop Latest Stash"
+      },
+      {
+        "command": "git-branch-manager.undoDelete",
+        "title": "Git Branch Manager: Undo Delete (Restore Last Deleted Branch)"
       }
     ],
     "menus": {

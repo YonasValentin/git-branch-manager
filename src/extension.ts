@@ -9,6 +9,7 @@ import {
   StashInfo,
   BranchNote,
   CleanupRule,
+  DeletedBranchEntry,
 } from './types';
 
 // Constants
@@ -49,6 +50,8 @@ import {
   getCleanupRules,
   saveCleanupRules,
   evaluateCleanupRule,
+  getRecoveryLog,
+  removeRecoveryEntry,
 } from './storage';
 
 // Commands
@@ -64,6 +67,8 @@ import {
   deleteBranch,
   deleteMultipleBranches,
   checkBranchHealth,
+  undoLastDelete,
+  restoreFromLog,
 } from './commands';
 
 let globalStatusBarItem: vscode.StatusBarItem | undefined;
@@ -115,6 +120,16 @@ export function activate(context: vscode.ExtensionContext) {
     quickStashPop();
   });
   context.subscriptions.push(stashPopCommand);
+
+  const undoDeleteCommand = vscode.commands.registerCommand('git-branch-manager.undoDelete', async () => {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) return;
+    const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
+    if (!gitRoot) return;
+    await undoLastDelete(context, gitRoot);
+    await updateGlobalStatusBar();
+  });
+  context.subscriptions.push(undoDeleteCommand);
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = 'git-branch-manager.cleanup';
@@ -196,13 +211,13 @@ async function showBranchManager(context: vscode.ExtensionContext) {
   async function updateWebview() {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders) {
-      panel.webview.html = getWebviewContent(panel.webview, [], [], [], [], {}, {}, 30, 60, null, '', {});
+      panel.webview.html = getWebviewContent(panel.webview, [], [], [], [], {}, {}, 30, 60, null, '', {}, []);
       return;
     }
 
     const gitRoot = await getGitRoot(workspaceFolders[0].uri.fsPath);
     if (!gitRoot) {
-      panel.webview.html = getWebviewContent(panel.webview, [], [], [], [], {}, {}, 30, 60, null, '', {});
+      panel.webview.html = getWebviewContent(panel.webview, [], [], [], [], {}, {}, 30, 60, null, '', {}, []);
       return;
     }
 
@@ -225,6 +240,7 @@ async function showBranchManager(context: vscode.ExtensionContext) {
     const cleanupRules: Record<string, CleanupRule> = Object.fromEntries(
       cleanupRulesArray.map(rule => [rule.id, rule])
     );
+    const recoveryLog = getRecoveryLog(context, gitRoot);
 
     panel.webview.html = getWebviewContent(
       panel.webview,
@@ -238,7 +254,8 @@ async function showBranchManager(context: vscode.ExtensionContext) {
       daysUntilOld,
       currentBranch,
       baseBranch,
-      {}
+      {},
+      recoveryLog
     );
   }
 
@@ -523,6 +540,24 @@ async function showBranchManager(context: vscode.ExtensionContext) {
         case 'refresh':
           await updateWebview();
           break;
+
+        case 'restoreBranch': {
+          const { branchName, commitHash } = message;
+          const result = await restoreFromLog(context, gitRoot, branchName, commitHash);
+          if (!result.success) {
+            vscode.window.showErrorMessage(`Failed to restore: ${result.error}`);
+          }
+          await updateWebview();
+          await updateGlobalStatusBar();
+          break;
+        }
+
+        case 'clearRecoveryEntry': {
+          const { branchName, commitHash } = message;
+          await removeRecoveryEntry(context, gitRoot, branchName, commitHash);
+          await updateWebview();
+          break;
+        }
       }
     },
     undefined,
@@ -544,6 +579,7 @@ async function showBranchManager(context: vscode.ExtensionContext) {
  * @param currentBranch - Currently checked out branch
  * @param baseBranch - Base branch for comparisons
  * @param githubPRs - GitHub pull requests by branch
+ * @param recoveryLog - Deleted branches available for recovery
  * @returns HTML string for webview
  */
 function getWebviewContent(
@@ -555,10 +591,11 @@ function getWebviewContent(
   branchNotes: Record<string, BranchNote>,
   cleanupRules: Record<string, CleanupRule>,
   daysUntilStale: number,
-  daysUntilOld: number,
+  _daysUntilOld: number,
   currentBranch: string | null,
-  baseBranch: string,
-  githubPRs: Record<string, PRStatus>
+  _baseBranch: string,
+  _githubPRs: Record<string, PRStatus>,
+  recoveryLog: DeletedBranchEntry[]
 ): string {
   const nonce = getNonce();
 
@@ -658,10 +695,39 @@ function getWebviewContent(
     `;
   }
 
+  function renderRecoveryRow(entry: DeletedBranchEntry): string {
+    const timeAgo = formatRecoveryTime(entry.deletedAt);
+    return `
+      <tr data-recovery="${escapeHtml(entry.branchName)}">
+        <td>
+          <div class="branch-name">${escapeHtml(entry.branchName)}</div>
+        </td>
+        <td>${timeAgo}</td>
+        <td><code>${entry.commitHash.substring(0, 7)}</code></td>
+        <td>
+          <button class="action-btn" onclick="restoreBranch('${escapeHtml(entry.branchName)}', '${entry.commitHash}')">Restore</button>
+          <button class="action-btn" onclick="dismissRecoveryEntry('${escapeHtml(entry.branchName)}', '${entry.commitHash}')">Dismiss</button>
+        </td>
+      </tr>
+    `;
+  }
+
+  function formatRecoveryTime(timestamp: number): string {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) return 'just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  }
+
   const branchRows = allBranches.map(renderBranchRow).join('');
   const remoteBranchRows = remoteBranches.map(renderRemoteBranchRow).join('');
   const worktreeRows = worktrees.map(renderWorktreeRow).join('');
   const stashRows = stashes.map(renderStashRow).join('');
+  const recoveryRows = recoveryLog.map(renderRecoveryRow).join('');
 
   const cleanupRulesArray = Object.entries(cleanupRules).map(([_id, rule]) => rule);
   const rulesJson = JSON.stringify(cleanupRulesArray);
@@ -1021,6 +1087,7 @@ function getWebviewContent(
     <button class="tab" onclick="showTab('remotes')">Remote Branches</button>
     <button class="tab" onclick="showTab('worktrees')">Worktrees</button>
     <button class="tab" onclick="showTab('stashes')">Stashes</button>
+    <button class="tab" onclick="showTab('recovery')">Recovery${recoveryLog.length > 0 ? ` (${recoveryLog.length})` : ''}</button>
     <button class="tab" onclick="showTab('tools')">Tools</button>
   </div>
 
@@ -1140,6 +1207,35 @@ function getWebviewContent(
       </thead>
       <tbody>
         ${stashRows}
+      </tbody>
+    </table>
+    `
+    }
+  </div>
+
+  <div id="recovery-tab" class="tab-content">
+    <div class="toolbar">
+      <h3>🔄 Recovery Log</h3>
+      <span style="margin-left: auto; color: var(--vscode-descriptionForeground);">
+        ${recoveryLog.length} deleted branch${recoveryLog.length !== 1 ? 'es' : ''} available for recovery
+      </span>
+    </div>
+
+    ${
+      recoveryLog.length === 0
+        ? '<div class="empty-state"><p>No deleted branches to recover.</p><p style="font-size: 12px; margin-top: 8px;">Deleted branches will appear here for recovery.</p></div>'
+        : `
+    <table>
+      <thead>
+        <tr>
+          <th>Branch</th>
+          <th>Deleted</th>
+          <th>Commit</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${recoveryRows}
       </tbody>
     </table>
     `
@@ -1328,6 +1424,15 @@ function getWebviewContent(
     // Worktree actions
     function createWorktree() {
       vscode.postMessage({ command: 'createWorktree' });
+    }
+
+    // Recovery actions
+    function restoreBranch(branchName, commitHash) {
+      vscode.postMessage({ command: 'restoreBranch', branchName, commitHash });
+    }
+
+    function dismissRecoveryEntry(branchName, commitHash) {
+      vscode.postMessage({ command: 'clearRecoveryEntry', branchName, commitHash });
     }
 
     // Tools actions

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { getGitRoot, getBranchInfo, exec, getCommitHash } from '../git';
-import { addRecoveryEntry } from '../storage';
+import { getGitRoot, getBranchInfo, exec, getCommitHash, restoreBranch } from '../git';
+import { addRecoveryEntry, getRecoveryLog, removeRecoveryEntry } from '../storage';
 import { BRANCH_TEMPLATES } from '../constants';
 
 /**
@@ -385,4 +385,79 @@ async function showReviewRequest(context: vscode.ExtensionContext): Promise<void
   }
 
   context.globalState.update('lastReviewRequestDate', Date.now());
+}
+
+/**
+ * Formats a timestamp as a human-readable "time ago" string.
+ */
+function getTimeAgo(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days > 1 ? 's' : ''} ago`;
+}
+
+/**
+ * Undoes the last branch deletion by restoring from recovery log.
+ * @param context - Extension context
+ * @param cwd - Working directory (git root)
+ */
+export async function undoLastDelete(
+  context: vscode.ExtensionContext,
+  cwd: string
+): Promise<void> {
+  const log = getRecoveryLog(context, cwd);
+
+  if (log.length === 0) {
+    vscode.window.showInformationMessage('No deleted branches to restore.');
+    return;
+  }
+
+  const lastEntry = log[0]; // Newest entry is first
+  const timeAgo = getTimeAgo(lastEntry.deletedAt);
+
+  const result = await vscode.window.showInformationMessage(
+    `Restore branch "${lastEntry.branchName}" (deleted ${timeAgo})?`,
+    { modal: true },
+    'Restore',
+    'Cancel'
+  );
+
+  if (result !== 'Restore') return;
+
+  const restoreResult = await restoreBranch(cwd, lastEntry.branchName, lastEntry.commitHash);
+
+  if (restoreResult.success) {
+    await removeRecoveryEntry(context, cwd, lastEntry.branchName, lastEntry.commitHash);
+    vscode.window.showInformationMessage(`Restored branch: ${lastEntry.branchName}`);
+  } else {
+    vscode.window.showErrorMessage(`Failed to restore: ${restoreResult.error}`);
+  }
+}
+
+/**
+ * Restores a specific branch from the recovery log.
+ * @param context - Extension context
+ * @param cwd - Working directory
+ * @param branchName - Branch name to restore
+ * @param commitHash - Commit hash to restore to
+ */
+export async function restoreFromLog(
+  context: vscode.ExtensionContext,
+  cwd: string,
+  branchName: string,
+  commitHash: string
+): Promise<{ success: boolean; error?: string }> {
+  const result = await restoreBranch(cwd, branchName, commitHash);
+
+  if (result.success) {
+    await removeRecoveryEntry(context, cwd, branchName, commitHash);
+    vscode.window.showInformationMessage(`Restored branch: ${branchName}`);
+  }
+
+  return result;
 }

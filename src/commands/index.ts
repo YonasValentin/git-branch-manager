@@ -16,7 +16,9 @@ export {
   switchBranch,
   deleteBranch,
   deleteMultipleBranches,
-  checkBranchHealth
+  checkBranchHealth,
+  undoLastDelete,
+  restoreFromLog
 } from './branch';
 
 // Remote commands
