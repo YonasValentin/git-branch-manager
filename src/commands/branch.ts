@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { getGitRoot, getBranchInfo, exec } from '../git';
+import { getGitRoot, getBranchInfo, exec, getCommitHash } from '../git';
+import { addRecoveryEntry } from '../storage';
 import { BRANCH_TEMPLATES } from '../constants';
 
 /**
@@ -160,16 +161,29 @@ export async function deleteBranch(cwd: string, branchName: string, context?: vs
   }
 
   try {
+    // Capture commit hash BEFORE deletion for recovery
+    const commitHash = await getCommitHash(cwd, branchName);
+
     await exec(`git branch -D -- ${JSON.stringify(branchName)}`, { cwd });
     vscode.window.showInformationMessage(`Deleted branch: ${branchName}`);
+
+    // Store recovery entry if we have context and captured the hash
+    if (context && commitHash) {
+      await addRecoveryEntry(context, cwd, {
+        branchName,
+        commitHash,
+        deletedAt: Date.now(),
+      });
+    }
 
     if (context) {
       const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
       context.globalState.update('totalBranchesDeleted', totalDeleted + 1);
     }
     return true;
-  } catch (error: any) {
-    vscode.window.showErrorMessage(`Failed to delete branch ${branchName}: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    vscode.window.showErrorMessage(`Failed to delete branch ${branchName}: ${errorMessage}`);
     return false;
   }
 }
@@ -183,12 +197,24 @@ export async function deleteBranch(cwd: string, branchName: string, context?: vs
 export async function deleteMultipleBranches(cwd: string, branches: string[], context?: vscode.ExtensionContext): Promise<void> {
   if (!branches.length) return;
 
+  // Capture commit hashes BEFORE deletion for recovery
+  const commitHashes: Map<string, string> = new Map();
+  if (context) {
+    for (const branch of branches) {
+      const hash = await getCommitHash(cwd, branch);
+      if (hash) {
+        commitHashes.set(branch, hash);
+      }
+    }
+  }
+
   const result = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: 'Deleting branches', cancellable: false },
     async (progress) => {
       let deleted = 0;
       let failed = 0;
       const failedBranches: string[] = [];
+      const deletedBranches: string[] = [];
 
       if (branches.length > 1) {
         progress.report({ increment: 50, message: `Deleting ${branches.length} branches...` });
@@ -197,16 +223,19 @@ export async function deleteMultipleBranches(cwd: string, branches: string[], co
           const args = branches.map(b => JSON.stringify(b)).join(' ');
           await exec(`git branch -D -- ${args}`, { cwd });
           deleted = branches.length;
+          deletedBranches.push(...branches);
           progress.report({ increment: 50, message: 'Done' });
-        } catch (err: any) {
+        } catch (err: unknown) {
           // Batch failed, fall back to sequential for accurate error tracking
-          console.warn('Batch delete failed:', err.message);
+          const errMessage = err instanceof Error ? err.message : String(err);
+          console.warn('Batch delete failed:', errMessage);
 
           for (let i = 0; i < branches.length; i++) {
             progress.report({ increment: 50 / branches.length, message: branches[i] });
             try {
               await exec(`git branch -D -- ${JSON.stringify(branches[i])}`, { cwd });
               deleted++;
+              deletedBranches.push(branches[i]);
             } catch {
               failed++;
               failedBranches.push(branches[i]);
@@ -218,11 +247,26 @@ export async function deleteMultipleBranches(cwd: string, branches: string[], co
         try {
           await exec(`git branch -D -- ${JSON.stringify(branches[0])}`, { cwd });
           deleted = 1;
+          deletedBranches.push(branches[0]);
         } catch {
           failed = 1;
           failedBranches.push(branches[0]);
         }
         progress.report({ increment: 50, message: 'Done' });
+      }
+
+      // Store recovery entries for successfully deleted branches
+      if (context) {
+        for (const branch of deletedBranches) {
+          const hash = commitHashes.get(branch);
+          if (hash) {
+            await addRecoveryEntry(context, cwd, {
+              branchName: branch,
+              commitHash: hash,
+              deletedAt: Date.now(),
+            });
+          }
+        }
       }
 
       return { deleted, failed, failedBranches };

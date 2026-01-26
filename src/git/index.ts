@@ -16,7 +16,9 @@ export {
   getAllBranchNames,
   renameBranch,
   deleteBranchForce,
-  compareBranches
+  compareBranches,
+  getCommitHash,
+  restoreBranch
 } from './branches';
 
 // Stash operations

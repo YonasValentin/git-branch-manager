@@ -370,3 +370,49 @@ export async function compareBranches(cwd: string, branchA: string, branchB: str
 
   return result;
 }
+
+/**
+ * Gets the commit hash that a branch points to.
+ * @param cwd - Working directory
+ * @param branchName - Branch name
+ * @returns Commit hash (full 40-char SHA)
+ */
+export async function getCommitHash(cwd: string, branchName: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await exec(`git rev-parse ${JSON.stringify(branchName)}`, { cwd });
+    return stdout.trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Restores a deleted branch by creating it at the specified commit.
+ * @param cwd - Working directory
+ * @param branchName - Branch name to create
+ * @param commitHash - Commit hash to point the branch to
+ * @returns Success status and error message if failed
+ */
+export async function restoreBranch(
+  cwd: string,
+  branchName: string,
+  commitHash: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // First verify the commit exists (might have been garbage collected)
+    await exec(`git cat-file -t ${JSON.stringify(commitHash)}`, { cwd });
+
+    // Create branch at the commit
+    await exec(`git branch ${JSON.stringify(branchName)} ${JSON.stringify(commitHash)}`, { cwd });
+    return { success: true };
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes('Not a valid object name') || errorMessage.includes('bad object')) {
+      return { success: false, error: 'Commit no longer exists (may have been garbage collected)' };
+    }
+    if (errorMessage.includes('already exists')) {
+      return { success: false, error: 'A branch with this name already exists' };
+    }
+    return { success: false, error: errorMessage };
+  }
+}
