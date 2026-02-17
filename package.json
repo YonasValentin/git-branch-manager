@@ -136,6 +136,10 @@
       {
         "command": "git-branch-manager.loadMoreBranches",
         "title": "Load More Branches"
+      },
+      {
+        "command": "git-branch-manager.cleanGoneBranches",
+        "title": "Git Branch Manager: Clean Gone Branches"
       }
     ],
     "menus": {
@@ -223,6 +227,10 @@
         {
           "command": "git-branch-manager.loadMoreBranches",
           "when": "false"
+        },
+        {
+          "command": "git-branch-manager.cleanGoneBranches",
+          "when": "false"
         }
       ]
     },
@@ -257,6 +265,22 @@
           "type": "boolean",
           "default": true,
           "description": "Ask for confirmation before deleting branches"
+        },
+        "gitBranchManager.goneBranchAction": {
+          "type": "string",
+          "enum": ["prompt", "auto-delete", "notify-only"],
+          "enumItemLabels": [
+            "Prompt — ask before deleting",
+            "Auto-delete silently",
+            "Notify only — no action"
+          ],
+          "markdownEnumDescriptions": [
+            "Show a notification with action buttons when orphaned branches are detected after fetch.",
+            "Automatically delete orphaned branches after every fetch without prompting. Branches are logged to recovery.",
+            "Show a passive notification only — take no cleanup action."
+          ],
+          "default": "prompt",
+          "description": "Action to take when branches tracking deleted remotes are detected after fetch"
         }
       }
     },
