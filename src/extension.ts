@@ -131,6 +131,85 @@ export async function activate(context: vscode.ExtensionContext) {
     );
   }
 
+  // Tree-specific command handlers (TREE-04)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('git-branch-manager.refreshTree', () => {
+      branchTreeProvider.scheduleRefresh();
+    }),
+
+    vscode.commands.registerCommand('git-branch-manager.loadMoreBranches', (group: StatusGroupItem) => {
+      branchTreeProvider.loadMore(group);
+    }),
+
+    vscode.commands.registerCommand('git-branch-manager.treeDeleteBranch', async (item: BranchItem) => {
+      if (!item?.branch?.name || !item?.repoPath) return;
+
+      const config = vscode.workspace.getConfiguration('gitBranchManager');
+      const confirmBeforeDelete = config.get<boolean>('confirmBeforeDelete', true);
+
+      if (confirmBeforeDelete) {
+        const answer = await vscode.window.showWarningMessage(
+          `Delete branch "${item.branch.name}"?`,
+          { modal: true },
+          'Delete'
+        );
+        if (answer !== 'Delete') return;
+      }
+
+      try {
+        await deleteBranchForce(item.repoPath, item.branch.name);
+        vscode.window.showInformationMessage(`Deleted branch: ${item.branch.name}`);
+        branchTreeProvider.scheduleRefresh();
+        updateGlobalStatusBar();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`Failed to delete branch: ${msg}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('git-branch-manager.treeSwitchBranch', async (item: BranchItem) => {
+      if (!item?.branch?.name || !item?.repoPath) return;
+
+      try {
+        await switchBranch(item.repoPath, item.branch.name);
+        branchTreeProvider.scheduleRefresh();
+        updateGlobalStatusBar();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`Failed to switch branch: ${msg}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('git-branch-manager.treeCompareBranch', async (item: BranchItem) => {
+      if (!item?.branch?.name || !item?.repoPath) return;
+
+      try {
+        const currentBranch = await getCurrentBranch(item.repoPath);
+        if (!currentBranch) {
+          vscode.window.showErrorMessage('Could not determine current branch');
+          return;
+        }
+        const comparison = await compareBranches(item.repoPath, currentBranch, item.branch.name);
+        const output = vscode.window.createOutputChannel('Branch Comparison');
+        output.clear();
+        output.appendLine(`Comparing: ${currentBranch} <-> ${item.branch.name}`);
+        output.appendLine(`─────────────────────────────────`);
+        output.appendLine(`Ahead: ${comparison.ahead} commits`);
+        output.appendLine(`Behind: ${comparison.behind} commits`);
+        if (comparison.files && comparison.files.length > 0) {
+          output.appendLine(`\nChanged files (${comparison.files.length}):`);
+          for (const file of comparison.files) {
+            output.appendLine(`  [${file.status}] ${file.path}`);
+          }
+        }
+        output.show();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`Failed to compare branches: ${msg}`);
+      }
+    }),
+  );
+
   const cleanupCommand = vscode.commands.registerCommand('git-branch-manager.cleanup', () => {
     showBranchManager(context, repoContext, updateGlobalStatusBar);
   });
