@@ -47,6 +47,26 @@ export function validateRegexPattern(pattern: string): RegexValidationResult {
 }
 
 /**
+ * Converts a simple glob pattern to a RegExp for branch name matching.
+ * Supports * (zero or more non-slash chars) and ? (exactly one non-slash char).
+ * Does NOT support ** (deep path) — branch names have no path separators.
+ */
+export function globToRegex(pattern: string): RegExp {
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]');
+  return new RegExp(`^${escaped}$`);
+}
+
+/**
+ * Returns true if branchName matches any exclusion glob pattern.
+ */
+export function isExcluded(branchName: string, exclusionPatterns: string[]): boolean {
+  return exclusionPatterns.some(p => globToRegex(p).test(branchName));
+}
+
+/**
  * Safely tests a string against a regex pattern with validation.
  * @param pattern - Regex pattern string
  * @param input - String to test

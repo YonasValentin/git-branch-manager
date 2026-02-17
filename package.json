@@ -281,6 +281,23 @@
           ],
           "default": "prompt",
           "description": "Action to take when branches tracking deleted remotes are detected after fetch"
+        },
+        "gitBranchManager.autoCleanupOnEvents": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["fetch", "pull", "merge"] },
+          "default": ["fetch", "pull"],
+          "description": "Git events that trigger automatic cleanup evaluation. 'merge' also triggers on git reset (ORIG_HEAD is shared)."
+        },
+        "gitBranchManager.cleanupExclusionPatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "Glob patterns for branches never to auto-delete. Example: `release/*`, `protect-*`"
+        },
+        "gitBranchManager.teamSafeMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Only suggest branches where you are the commit author (team-safe mode)"
         }
       }
     },
