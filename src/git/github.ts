@@ -1,5 +1,5 @@
 import * as https from 'https';
-import { exec } from './core';
+import { gitCommand } from './core';
 import { PRStatus } from '../types';
 
 /**
@@ -9,8 +9,7 @@ import { PRStatus } from '../types';
  */
 export async function getGitHubInfo(cwd: string): Promise<{ owner: string; repo: string } | null> {
   try {
-    const { stdout } = await exec('git remote get-url origin', { cwd });
-    const url = stdout.trim();
+    const url = await gitCommand(['remote', 'get-url', 'origin'], cwd);
     const match = url.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
     if (match) {
       return { owner: match[1], repo: match[2].replace(/\.git$/, '') };

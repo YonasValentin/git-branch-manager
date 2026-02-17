@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getGitRoot, getCurrentBranch, getBranchInfo, getWorktreeInfo, exec } from '../git';
+import { getGitRoot, getCurrentBranch, getBranchInfo, getWorktreeInfo, gitCommand } from '../git';
 import { formatAge } from '../utils';
 
 /**
@@ -44,7 +44,7 @@ export async function createWorktreeFromBranch(): Promise<void> {
   if (!worktreePath) return;
 
   try {
-    await exec(`git worktree add ${JSON.stringify(worktreePath)} ${JSON.stringify(selected.branch.name)}`, { cwd: gitRoot });
+    await gitCommand(['worktree', 'add', worktreePath, selected.branch.name], gitRoot);
 
     const openInNewWindow = await vscode.window.showInformationMessage(
       `Worktree created at ${worktreePath}`,
@@ -133,13 +133,13 @@ export async function showWorktreeManager(context: vscode.ExtensionContext): Pro
           'Remove'
         );
         if (confirm === 'Remove') {
-          await exec(`git worktree remove ${JSON.stringify(selected.worktree.path)}`, { cwd: gitRoot });
+          await gitCommand(['worktree', 'remove', selected.worktree.path], gitRoot);
           vscode.window.showInformationMessage('Worktree removed');
         }
         break;
       case 'toggle-lock':
         const lockCmd = selected.worktree.isLocked ? 'unlock' : 'lock';
-        await exec(`git worktree ${lockCmd} ${JSON.stringify(selected.worktree.path)}`, { cwd: gitRoot });
+        await gitCommand(['worktree', lockCmd, selected.worktree.path], gitRoot);
         vscode.window.showInformationMessage(`Worktree ${lockCmd}ed`);
         break;
     }

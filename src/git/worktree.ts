@@ -1,4 +1,4 @@
-import { exec } from './core';
+import { gitCommand } from './core';
 import { WorktreeInfo } from '../types';
 
 /**
@@ -10,8 +10,8 @@ export async function getWorktreeInfo(cwd: string): Promise<WorktreeInfo[]> {
   const worktrees: WorktreeInfo[] = [];
 
   try {
-    const { stdout } = await exec('git worktree list --porcelain', { cwd });
-    const entries = stdout.trim().split('\n\n');
+    const stdout = await gitCommand(['worktree', 'list', '--porcelain'], cwd);
+    const entries = stdout.split('\n\n');
 
     for (const entry of entries) {
       if (!entry.trim()) continue;

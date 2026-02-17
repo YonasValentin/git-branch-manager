@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getGitRoot, getRemoteBranchInfo, exec } from '../git';
+import { getGitRoot, getRemoteBranchInfo, gitCommand } from '../git';
 import { RemoteBranchInfo } from '../types';
 
 /**
@@ -87,7 +87,7 @@ export async function cleanRemoteBranches(context: vscode.ExtensionContext): Pro
         progress.report({ increment: 100 / toDelete.length, message: branch.name });
 
         try {
-          await exec(`git push ${branch.remote} --delete ${JSON.stringify(branch.name)}`, { cwd: gitRoot });
+          await gitCommand(['push', branch.remote, '--delete', branch.name], gitRoot);
           deleted++;
         } catch {
           failed++;

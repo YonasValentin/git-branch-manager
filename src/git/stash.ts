@@ -1,4 +1,4 @@
-import { exec } from './core';
+import { gitCommand } from './core';
 import { StashInfo } from '../types';
 
 /**
@@ -9,10 +9,10 @@ export async function getStashInfo(cwd: string): Promise<StashInfo[]> {
   const stashes: StashInfo[] = [];
 
   try {
-    const { stdout } = await exec('git stash list --format="%gd|%s|%ci"', { cwd });
-    if (!stdout.trim()) return [];
+    const stdout = await gitCommand(['stash', 'list', '--format=%gd|%s|%ci'], cwd);
+    if (!stdout) return [];
 
-    const lines = stdout.trim().split('\n');
+    const lines = stdout.split('\n');
     const entries: { index: number; message: string; branch: string; date: Date; daysOld: number }[] = [];
 
     for (const line of lines) {
@@ -46,12 +46,12 @@ export async function getStashInfo(cwd: string): Promise<StashInfo[]> {
           let files: string[] = [];
 
           try {
-            const { stdout: nameOnly } = await exec(`git stash show stash@{${entry.index}} --name-only`, { cwd });
-            files = nameOnly.trim().split('\n').filter(Boolean);
+            const nameOnly = await gitCommand(['stash', 'show', `stash@{${entry.index}}`, '--name-only'], cwd);
+            files = nameOnly.split('\n').filter(Boolean);
             filesChanged = files.length;
           } catch {
             try {
-              const { stdout: stat } = await exec(`git stash show stash@{${entry.index}} --stat`, { cwd });
+              const stat = await gitCommand(['stash', 'show', `stash@{${entry.index}}`, '--stat'], cwd);
               const match = stat.match(/(\d+) files? changed/);
               if (match) filesChanged = parseInt(match[1]);
             } catch {}
@@ -78,9 +78,12 @@ export async function getStashInfo(cwd: string): Promise<StashInfo[]> {
  */
 export async function createStash(cwd: string, message?: string, includeUntracked?: boolean): Promise<boolean> {
   try {
-    const untrackedFlag = includeUntracked ? '-u ' : '';
-    const messageFlag = message ? `-m ${JSON.stringify(message)}` : '';
-    await exec(`git stash push ${untrackedFlag}${messageFlag}`.trim(), { cwd });
+    const args = ['stash', 'push'];
+    if (includeUntracked) args.push('-u');
+    if (message) {
+      args.push('-m', message);
+    }
+    await gitCommand(args, cwd);
     return true;
   } catch (error) {
     console.error('Error creating stash:', error);
@@ -96,7 +99,7 @@ export async function createStash(cwd: string, message?: string, includeUntracke
  */
 export async function applyStash(cwd: string, index: number): Promise<boolean> {
   try {
-    await exec(`git stash apply stash@{${index}}`, { cwd });
+    await gitCommand(['stash', 'apply', `stash@{${index}}`], cwd);
     return true;
   } catch (error) {
     console.error('Error applying stash:', error);
@@ -112,7 +115,7 @@ export async function applyStash(cwd: string, index: number): Promise<boolean> {
  */
 export async function popStash(cwd: string, index: number): Promise<boolean> {
   try {
-    await exec(`git stash pop stash@{${index}}`, { cwd });
+    await gitCommand(['stash', 'pop', `stash@{${index}}`], cwd);
     return true;
   } catch (error) {
     console.error('Error popping stash:', error);
@@ -128,7 +131,7 @@ export async function popStash(cwd: string, index: number): Promise<boolean> {
  */
 export async function dropStash(cwd: string, index: number): Promise<boolean> {
   try {
-    await exec(`git stash drop stash@{${index}}`, { cwd });
+    await gitCommand(['stash', 'drop', `stash@{${index}}`], cwd);
     return true;
   } catch (error) {
     console.error('Error dropping stash:', error);
@@ -143,7 +146,7 @@ export async function dropStash(cwd: string, index: number): Promise<boolean> {
  */
 export async function clearStashes(cwd: string): Promise<boolean> {
   try {
-    await exec('git stash clear', { cwd });
+    await gitCommand(['stash', 'clear'], cwd);
     return true;
   } catch (error) {
     console.error('Error clearing stashes:', error);

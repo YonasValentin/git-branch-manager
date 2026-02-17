@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getGitRoot, getBranchInfo, exec, getCommitHash, restoreBranch } from '../git';
+import { getGitRoot, getBranchInfo, gitCommand, getCommitHash, restoreBranch } from '../git';
 import { addRecoveryEntry, getRecoveryLog, removeRecoveryEntry } from '../storage';
 import { BRANCH_TEMPLATES } from '../constants';
 
@@ -20,7 +20,7 @@ export async function createBranchFromTemplate(): Promise<void> {
   }
 
   try {
-    await exec('git log -1', { cwd: gitRoot });
+    await gitCommand(['log', '-1'], gitRoot);
   } catch {
     await vscode.window.showErrorMessage(
       'Cannot create a branch: Your repository has no commits yet.',
@@ -60,7 +60,7 @@ export async function createBranchFromTemplate(): Promise<void> {
     .replace('{version}', description);
 
   try {
-    await exec(`git checkout -b ${JSON.stringify(branchName)}`, { cwd: gitRoot });
+    await gitCommand(['checkout', '-b', branchName], gitRoot);
     vscode.window.showInformationMessage(`Created branch: ${branchName}`);
   } catch (error: any) {
     if (error.message.includes('already exists')) {
@@ -132,7 +132,7 @@ export async function switchBranch(cwd: string, branchName: string): Promise<voi
   if (result !== 'Yes') return;
 
   try {
-    await exec(`git checkout ${JSON.stringify(branchName)}`, { cwd });
+    await gitCommand(['checkout', '--', branchName], cwd);
     vscode.window.showInformationMessage(`Switched to branch: ${branchName}`);
   } catch (error: any) {
     vscode.window.showErrorMessage(`Failed to switch branch: ${error.message}`);
@@ -164,7 +164,7 @@ export async function deleteBranch(cwd: string, branchName: string, context?: vs
     // Capture commit hash BEFORE deletion for recovery
     const commitHash = await getCommitHash(cwd, branchName);
 
-    await exec(`git branch -D -- ${JSON.stringify(branchName)}`, { cwd });
+    await gitCommand(['branch', '-D', '--', branchName], cwd);
     vscode.window.showInformationMessage(`Deleted branch: ${branchName}`);
 
     // Store recovery entry if we have context and captured the hash
@@ -220,8 +220,8 @@ export async function deleteMultipleBranches(cwd: string, branches: string[], co
         progress.report({ increment: 50, message: `Deleting ${branches.length} branches...` });
 
         try {
-          const args = branches.map(b => JSON.stringify(b)).join(' ');
-          await exec(`git branch -D -- ${args}`, { cwd });
+          const args = ['branch', '-D', '--', ...branches];
+          await gitCommand(args, cwd);
           deleted = branches.length;
           deletedBranches.push(...branches);
           progress.report({ increment: 50, message: 'Done' });
@@ -233,7 +233,7 @@ export async function deleteMultipleBranches(cwd: string, branches: string[], co
           for (let i = 0; i < branches.length; i++) {
             progress.report({ increment: 50 / branches.length, message: branches[i] });
             try {
-              await exec(`git branch -D -- ${JSON.stringify(branches[i])}`, { cwd });
+              await gitCommand(['branch', '-D', '--', branches[i]], cwd);
               deleted++;
               deletedBranches.push(branches[i]);
             } catch {
@@ -245,7 +245,7 @@ export async function deleteMultipleBranches(cwd: string, branches: string[], co
       } else {
         progress.report({ increment: 50, message: branches[0] });
         try {
-          await exec(`git branch -D -- ${JSON.stringify(branches[0])}`, { cwd });
+          await gitCommand(['branch', '-D', '--', branches[0]], cwd);
           deleted = 1;
           deletedBranches.push(branches[0]);
         } catch {
