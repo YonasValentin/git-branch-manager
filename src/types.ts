@@ -1,3 +1,17 @@
+import * as vscode from 'vscode';
+
+/**
+ * Git repository discovered in the workspace.
+ */
+export interface GitRepository {
+  /** Canonical git root path */
+  path: string;
+  /** The workspace folder this repository belongs to */
+  workspaceFolder: vscode.WorkspaceFolder;
+  /** Display name (basename of path) */
+  name: string;
+}
+
 /**
  * Branch information with health metrics and integration data.
  */
