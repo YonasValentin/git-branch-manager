@@ -3,24 +3,29 @@ import { CleanupRule, BranchInfo } from '../types';
 import { safeRegexTest } from '../utils/regex';
 
 /**
- * Gets cleanup rules from extension storage.
+ * Gets cleanup rules from extension storage, scoped to a repository.
  * @param context - Extension context
+ * @param repoPath - Repository path for scoping (canonical git root)
  * @returns Array of cleanup rules
  */
-export function getCleanupRules(context: vscode.ExtensionContext): CleanupRule[] {
-  return context.globalState.get<CleanupRule[]>('cleanupRules', []);
+export function getCleanupRules(context: vscode.ExtensionContext, repoPath: string): CleanupRule[] {
+  const key = `cleanupRules:${repoPath}`;
+  return context.workspaceState.get<CleanupRule[]>(key, []);
 }
 
 /**
- * Saves cleanup rules to extension storage.
+ * Saves cleanup rules to extension storage, scoped to a repository.
  * @param context - Extension context
+ * @param repoPath - Repository path for scoping (canonical git root)
  * @param rules - Rules to save
  */
 export async function saveCleanupRules(
   context: vscode.ExtensionContext,
+  repoPath: string,
   rules: CleanupRule[]
 ): Promise<void> {
-  await context.globalState.update('cleanupRules', rules);
+  const key = `cleanupRules:${repoPath}`;
+  await context.workspaceState.update(key, rules);
 }
 
 /**
