@@ -13,7 +13,7 @@ import {
 } from './types';
 
 // Services
-import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem } from './services';
+import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem, GoneDetector } from './services';
 
 // Constants
 import { BRANCH_TEMPLATES } from './constants';
@@ -130,6 +130,31 @@ export async function activate(context: vscode.ExtensionContext) {
       refsWatcher, headWatcher, packedWatcher
     );
   }
+
+  // Gone branch auto-detection (GONE-01, GONE-02, GONE-03, GONE-04)
+  const goneDetector = new GoneDetector(repoContext, branchTreeProvider, context);
+  await goneDetector.initialize();
+  context.subscriptions.push(goneDetector);
+
+  for (const repo of repoContext.getRepositories()) {
+    const fetchHeadPattern = new vscode.RelativePattern(repo.path, '.git/FETCH_HEAD');
+    const fetchHeadWatcher = vscode.workspace.createFileSystemWatcher(fetchHeadPattern);
+
+    context.subscriptions.push(
+      fetchHeadWatcher.onDidChange(() => goneDetector.onFetchCompleted(repo.path)),
+      fetchHeadWatcher.onDidCreate(() => goneDetector.onFetchCompleted(repo.path)),
+      fetchHeadWatcher
+    );
+  }
+
+  // cleanGoneBranches command (GONE-04) — programmatic trigger for manual gone-branch scan
+  context.subscriptions.push(
+    vscode.commands.registerCommand('git-branch-manager.cleanGoneBranches', () => {
+      for (const repo of repoContext.getRepositories()) {
+        goneDetector.onFetchCompleted(repo.path);
+      }
+    })
+  );
 
   // Tree-specific command handlers (TREE-04)
   context.subscriptions.push(
