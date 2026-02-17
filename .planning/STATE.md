@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-02-17
 **Current Milestone:** v2.0 High-Value Features
-**Current Phase:** 11
+**Current Phase:** 12
 
 ## Project Reference
 
@@ -10,23 +10,23 @@ See: .planning/PROJECT.md (updated 2026-02-17)
 
 **Core Value:** Effortless branch hygiene — developers keep repositories clean without thinking about it
 
-**Current Focus:** Phase 11 — Event-Driven Auto-Cleanup
+**Current Focus:** Phase 12 — Cleanup Rules UI
 
 ## Current Position
 
 **Milestone:** v2.0 High-Value Features (Phases 6-14)
-**Phase:** 11 of 14 (Event-Driven Auto-Cleanup) — In Progress
-**Plan:** 1 of 2 complete in phase 11
-**Status:** Plan 01 complete — ready for Plan 02 (wiring into extension.ts)
-**Last activity:** 2026-02-17 — Completed 11-01-PLAN.md (AutoCleanupEvaluator service, glob exclusion utils, 3 new settings)
+**Phase:** 12 of 14 (Cleanup Rules UI) — Pending
+**Plan:** 0 of ? complete in phase 12
+**Status:** Phase 11 complete — ready for Phase 12 (Cleanup Rules UI)
+**Last activity:** 2026-02-17 — Completed 11-02-PLAN.md (AutoCleanupEvaluator wired into extension.ts with FETCH_HEAD and ORIG_HEAD watchers)
 
-Progress: [█████░░░░░] 52% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plan 01 complete)
+Progress: [█████░░░░░] 55% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plans 01+02 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 19 (8 from v1.0 Phase 1, 3 from Phase 6, 2 from Phase 7, 2 from Phase 8, 2 from Phase 9, 2 from Phase 10, 1 from Phase 11)
-- Average duration: ~2 minutes (Phase 11 Plan 01: ~2 min)
+- Total plans completed: 20 (8 from v1.0 Phase 1, 3 from Phase 6, 2 from Phase 7, 2 from Phase 8, 2 from Phase 9, 2 from Phase 10, 2 from Phase 11)
+- Average duration: ~2 minutes (Phase 11 Plan 02: ~1 min)
 - Total execution time: Not yet tracked
 
 **By Phase:**
@@ -39,7 +39,7 @@ Progress: [█████░░░░░] 52% (Phase 6 complete, Phase 7 comple
 | 8. Multi-Repository Foundation | 2/2 | Complete |
 | 9. Sidebar Tree View | 2/2 | Complete |
 | 10. Gone Branch Auto-Detection | 2/2 | Complete |
-| 11. Event-Driven Auto-Cleanup | 1/2 | In Progress |
+| 11. Event-Driven Auto-Cleanup | 2/2 | Complete |
 
 **Recent Trend:**
 - Phase 8 completed 2/2 plans in ~3 minutes each
@@ -48,7 +48,8 @@ Progress: [█████░░░░░] 52% (Phase 6 complete, Phase 7 comple
 - Phase 10 Plan 01 completed in 2 minutes
 - Phase 10 Plan 02 completed in 2 minutes
 - Phase 11 Plan 01 completed in ~2 minutes
-- Trend: Stable, fast execution (avg ~2-3 min per plan)
+- Phase 11 Plan 02 completed in ~1 minute
+- Trend: Stable, fast execution (avg ~2 min per plan)
 
 ## Progress
 
@@ -71,7 +72,7 @@ Progress: [█████░░░░░] 52% (Phase 6 complete, Phase 7 comple
 | 8. Multi-Repository Foundation | Complete (2/2) | 2026-02-17 | 2026-02-17 |
 | 9. Sidebar Tree View | Complete (2/2) | 2026-02-17 | 2026-02-17 |
 | 10. Gone Branch Auto-Detection | Complete (2/2) | 2026-02-17 | 2026-02-17 |
-| 11. Event-Driven Auto-Cleanup | In Progress (1/2) | 2026-02-17 | - |
+| 11. Event-Driven Auto-Cleanup | Complete (2/2) | 2026-02-17 | 2026-02-17 |
 | 12. Cleanup Rules UI | Pending | - | - |
 | 13. Enhanced Comparison & Timeline | Pending | - | - |
 | 14. Platform Integration | Pending | - | - |
@@ -111,6 +112,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - **Phase 11 Plan 01 (AutoCleanupEvaluator Silent Early Returns)**: Returns silently when no enabled rules exist — avoids notification noise before user configures rules
 - **Phase 11 Plan 01 (teamSafeMode Safe Default)**: Skips author filter on gitCommand failure; branches with author === undefined treated as excluded (safe: "not mine")
 - **Phase 11 Plan 01 (Glob Pattern Placement)**: globToRegex/isExcluded placed before safeRegexTest in regex.ts — glob matching is separate concern from ReDoS-protected user-entered patterns
+- **Phase 11 Plan 02 (FETCH_HEAD Multi-Callback)**: Reuse existing FETCH_HEAD watcher — add autoCleanupEvaluator as second callback alongside goneDetector (no duplicate watcher)
+- **Phase 11 Plan 02 (ORIG_HEAD onDidCreate Only)**: ORIG_HEAD is recreated fresh on each git merge/reset — onDidCreate is sufficient; onDidChange would never fire
+- **Phase 11 Plan 02 (AutoCleanupEvaluator Positioning)**: Instantiated after goneDetector.initialize() and before watcher loops — consistent with Phase 10 GoneDetector positioning decision
 
 ### Pending Todos
 
@@ -126,15 +130,15 @@ None yet.
 - ✅ Plan 01: GoneDetector service, goneBranchAction enum setting, cleanGoneBranches command hidden from palette
 - ✅ Plan 02: GoneDetector wired into extension.ts with FETCH_HEAD watchers per repo, cleanGoneBranches command handler registered
 
-**Phase 11 (Event-Driven Auto-Cleanup) — Plan 01 COMPLETE:**
+**Phase 11 (Event-Driven Auto-Cleanup) — COMPLETE (2/2 plans):**
 - ✅ Plan 01: AutoCleanupEvaluator service, globToRegex/isExcluded utils, 3 new settings in package.json
-- Plan 02: Wire AutoCleanupEvaluator into extension.ts with FETCH_HEAD/MERGE_HEAD/ORIG_HEAD watchers
+- ✅ Plan 02: AutoCleanupEvaluator wired into extension.ts with FETCH_HEAD and ORIG_HEAD watchers
 
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 11-01-PLAN.md (AutoCleanupEvaluator service with glob exclusion, team-safe mode, dry-run preview)
-Resume: Proceed to Phase 11 Plan 02 — Wire AutoCleanupEvaluator into extension.ts
+Stopped at: Completed 11-02-PLAN.md — Phase 11 Event-Driven Auto-Cleanup complete
+Resume: Proceed to Phase 12 — Cleanup Rules UI
 
 ---
 
