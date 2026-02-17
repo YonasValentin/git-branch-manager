@@ -1,23 +1,20 @@
 import * as vscode from 'vscode';
-import { getGitRoot, getBranchInfo, gitCommand, getCommitHash, restoreBranch } from '../git';
+import { getBranchInfo, gitCommand, getCommitHash, restoreBranch } from '../git';
 import { addRecoveryEntry, getRecoveryLog, removeRecoveryEntry } from '../storage';
 import { BRANCH_TEMPLATES } from '../constants';
+import { RepositoryContextManager } from '../services';
 
 /**
  * Creates a branch from a template.
+ * @param repoContext - Repository context manager
  */
-export async function createBranchFromTemplate(): Promise<void> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
+export async function createBranchFromTemplate(repoContext: RepositoryContextManager): Promise<void> {
+  const repo = await repoContext.getActiveRepository();
+  if (!repo) {
     vscode.window.showErrorMessage('Not in a Git repository');
     return;
   }
-
-  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
-  if (!gitRoot) {
-    vscode.window.showErrorMessage('Not in a Git repository');
-    return;
-  }
+  const gitRoot = repo.path;
 
   try {
     await gitCommand(['log', '-1'], gitRoot);
@@ -73,24 +70,21 @@ export async function createBranchFromTemplate(): Promise<void> {
 
 /**
  * Quick cleanup of merged branches.
+ * @param repoContext - Repository context manager
  * @param context - Extension context
  * @param updateStatusBar - Optional callback to update status bar
  */
 export async function quickCleanup(
+  repoContext: RepositoryContextManager,
   context?: vscode.ExtensionContext,
   updateStatusBar?: () => Promise<void>
 ): Promise<void> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
+  const repo = await repoContext.getActiveRepository();
+  if (!repo) {
     vscode.window.showErrorMessage('Not in a Git repository');
     return;
   }
-
-  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
-  if (!gitRoot) {
-    vscode.window.showErrorMessage('Not in a Git repository');
-    return;
-  }
+  const gitRoot = repo.path;
 
   const branches = await getBranchInfo(gitRoot);
   const toDelete = branches.filter((b) => !b.isCurrentBranch && b.isMerged);
@@ -295,16 +289,15 @@ export async function deleteMultipleBranches(cwd: string, branches: string[], co
 
 /**
  * Checks branch health and shows notifications.
+ * @param repoContext - Repository context manager
  */
-export async function checkBranchHealth(): Promise<void> {
+export async function checkBranchHealth(repoContext: RepositoryContextManager): Promise<void> {
   const config = vscode.workspace.getConfiguration('gitBranchManager');
   if (!config.get('showNotifications', true)) return;
 
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) return;
-
-  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
-  if (!gitRoot) return;
+  const repo = await repoContext.getActiveRepository();
+  if (!repo) return;
+  const gitRoot = repo.path;
 
   const branches = await getBranchInfo(gitRoot);
   const daysUntilStale = config.get<number>('daysUntilStale', 30);

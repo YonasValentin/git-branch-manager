@@ -1,22 +1,19 @@
 import * as vscode from 'vscode';
-import { getGitRoot, getStashInfo, createStash, popStash } from '../git';
+import { getStashInfo, createStash, popStash } from '../git';
+import { RepositoryContextManager } from '../services';
 
 /**
  * Quick stash command handler.
+ * @param repoContext - Repository context manager
  * @param updateStatusBar - Optional callback to update status bar
  */
-export async function quickStash(updateStatusBar?: () => Promise<void>): Promise<void> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
+export async function quickStash(repoContext: RepositoryContextManager, updateStatusBar?: () => Promise<void>): Promise<void> {
+  const repo = await repoContext.getActiveRepository();
+  if (!repo) {
     vscode.window.showErrorMessage('Not in a Git repository');
     return;
   }
-
-  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
-  if (!gitRoot) {
-    vscode.window.showErrorMessage('Not in a Git repository');
-    return;
-  }
+  const gitRoot = repo.path;
 
   const options: vscode.QuickPickItem[] = [
     { label: 'Stash changes', description: 'Stash tracked files only' },
@@ -56,20 +53,16 @@ export async function quickStash(updateStatusBar?: () => Promise<void>): Promise
 
 /**
  * Pop latest stash command handler.
+ * @param repoContext - Repository context manager
  * @param updateStatusBar - Optional callback to update status bar
  */
-export async function quickStashPop(updateStatusBar?: () => Promise<void>): Promise<void> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
+export async function quickStashPop(repoContext: RepositoryContextManager, updateStatusBar?: () => Promise<void>): Promise<void> {
+  const repo = await repoContext.getActiveRepository();
+  if (!repo) {
     vscode.window.showErrorMessage('Not in a Git repository');
     return;
   }
-
-  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
-  if (!gitRoot) {
-    vscode.window.showErrorMessage('Not in a Git repository');
-    return;
-  }
+  const gitRoot = repo.path;
 
   const stashes = await getStashInfo(gitRoot);
   if (stashes.length === 0) {

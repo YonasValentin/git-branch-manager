@@ -1,23 +1,20 @@
 import * as vscode from 'vscode';
-import { getGitRoot, getRemoteBranchInfo, gitCommand } from '../git';
+import { getRemoteBranchInfo, gitCommand } from '../git';
 import { RemoteBranchInfo } from '../types';
+import { RepositoryContextManager } from '../services';
 
 /**
  * Cleans remote branches.
+ * @param repoContext - Repository context manager
  * @param context - Extension context
  */
-export async function cleanRemoteBranches(context: vscode.ExtensionContext): Promise<void> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
+export async function cleanRemoteBranches(repoContext: RepositoryContextManager, context: vscode.ExtensionContext): Promise<void> {
+  const repo = await repoContext.getActiveRepository();
+  if (!repo) {
     vscode.window.showErrorMessage('Not in a Git repository');
     return;
   }
-
-  const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
-  if (!gitRoot) {
-    vscode.window.showErrorMessage('Not in a Git repository');
-    return;
-  }
+  const gitRoot = repo.path;
 
   const remoteBranches = await getRemoteBranchInfo(gitRoot);
   const config = vscode.workspace.getConfiguration('gitBranchManager');
