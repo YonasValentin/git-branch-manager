@@ -13,7 +13,7 @@ import {
 } from './types';
 
 // Services
-import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem, GoneDetector } from './services';
+import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem, GoneDetector, AutoCleanupEvaluator } from './services';
 
 // Constants
 import { BRANCH_TEMPLATES } from './constants';
@@ -136,14 +136,35 @@ export async function activate(context: vscode.ExtensionContext) {
   await goneDetector.initialize();
   context.subscriptions.push(goneDetector);
 
+  // Auto-cleanup evaluator (AUTO-01 to AUTO-05)
+  const autoCleanupEvaluator = new AutoCleanupEvaluator(repoContext, branchTreeProvider, context);
+  context.subscriptions.push(autoCleanupEvaluator);
+
   for (const repo of repoContext.getRepositories()) {
     const fetchHeadPattern = new vscode.RelativePattern(repo.path, '.git/FETCH_HEAD');
     const fetchHeadWatcher = vscode.workspace.createFileSystemWatcher(fetchHeadPattern);
 
     context.subscriptions.push(
-      fetchHeadWatcher.onDidChange(() => goneDetector.onFetchCompleted(repo.path)),
-      fetchHeadWatcher.onDidCreate(() => goneDetector.onFetchCompleted(repo.path)),
+      fetchHeadWatcher.onDidChange(() => {
+        goneDetector.onFetchCompleted(repo.path);
+        autoCleanupEvaluator.onEventTriggered(repo.path);
+      }),
+      fetchHeadWatcher.onDidCreate(() => {
+        goneDetector.onFetchCompleted(repo.path);
+        autoCleanupEvaluator.onEventTriggered(repo.path);
+      }),
       fetchHeadWatcher
+    );
+  }
+
+  // ORIG_HEAD watcher for merge events (AUTO-01)
+  for (const repo of repoContext.getRepositories()) {
+    const origHeadPattern = new vscode.RelativePattern(repo.path, '.git/ORIG_HEAD');
+    const origHeadWatcher = vscode.workspace.createFileSystemWatcher(origHeadPattern);
+
+    context.subscriptions.push(
+      origHeadWatcher.onDidCreate(() => autoCleanupEvaluator.onEventTriggered(repo.path)),
+      origHeadWatcher
     );
   }
 
