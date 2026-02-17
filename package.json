@@ -65,6 +65,15 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "views": {
+      "scm": [
+        {
+          "id": "git-branch-manager.branchTree",
+          "name": "Branch Manager",
+          "when": "gitOpenRepositoryCount != 0"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "git-branch-manager.cleanup",
@@ -103,6 +112,30 @@
       {
         "command": "git-branch-manager.undoDelete",
         "title": "Git Branch Manager: Undo Delete (Restore Last Deleted Branch)"
+      },
+      {
+        "command": "git-branch-manager.treeDeleteBranch",
+        "title": "Delete Branch",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "git-branch-manager.treeSwitchBranch",
+        "title": "Switch to Branch",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "git-branch-manager.treeCompareBranch",
+        "title": "Compare with Current",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "git-branch-manager.refreshTree",
+        "title": "Refresh Branches",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "git-branch-manager.loadMoreBranches",
+        "title": "Load More Branches"
       }
     ],
     "menus": {
@@ -116,6 +149,30 @@
           "command": "git-branch-manager.cleanup",
           "group": "navigation@2",
           "when": "scmProvider == git"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "git-branch-manager.treeDeleteBranch",
+          "when": "view == git-branch-manager.branchTree && viewItem == branch",
+          "group": "1_branch@1"
+        },
+        {
+          "command": "git-branch-manager.treeSwitchBranch",
+          "when": "view == git-branch-manager.branchTree && viewItem == branch",
+          "group": "1_branch@2"
+        },
+        {
+          "command": "git-branch-manager.treeCompareBranch",
+          "when": "view == git-branch-manager.branchTree && viewItem == branch",
+          "group": "1_branch@3"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "git-branch-manager.refreshTree",
+          "when": "view == git-branch-manager.branchTree",
+          "group": "navigation"
         }
       ],
       "commandPalette": [
@@ -150,6 +207,22 @@
         {
           "command": "git-branch-manager.stashPop",
           "when": "gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "git-branch-manager.treeDeleteBranch",
+          "when": "false"
+        },
+        {
+          "command": "git-branch-manager.treeSwitchBranch",
+          "when": "false"
+        },
+        {
+          "command": "git-branch-manager.treeCompareBranch",
+          "when": "false"
+        },
+        {
+          "command": "git-branch-manager.loadMoreBranches",
+          "when": "false"
         }
       ]
     },
