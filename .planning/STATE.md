@@ -1,6 +1,6 @@
 # Project State: Git Branch Manager
 
-**Last Updated:** 2026-02-17
+**Last Updated:** 2026-02-18
 **Current Milestone:** v2.0 High-Value Features
 **Current Phase:** 12
 
@@ -16,16 +16,16 @@ See: .planning/PROJECT.md (updated 2026-02-17)
 
 **Milestone:** v2.0 High-Value Features (Phases 6-14)
 **Phase:** 12 of 14 (Cleanup Rules UI) — In Progress
-**Plan:** 1 of ? complete in phase 12
-**Status:** In progress
-**Last activity:** 2026-02-17 — Completed 12-01-PLAN.md (DOM-based rule builder with toggle/delete cards and add-rule form)
+**Plan:** 2 of 2 complete in phase 12
+**Status:** Phase 12 complete
+**Last activity:** 2026-02-18 — Completed 12-02-PLAN.md (dry-run preview per rule, JSON export/import via clipboard)
 
-Progress: [█████░░░░░] 57% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plans 01+02 complete, Phase 12 Plan 01 complete)
+Progress: [█████░░░░░] 64% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plans 01+02 complete, Phase 12 Plans 01+02 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 21 (8 from v1.0 Phase 1, 3 from Phase 6, 2 from Phase 7, 2 from Phase 8, 2 from Phase 9, 2 from Phase 10, 2 from Phase 11, 1 from Phase 12)
+- Total plans completed: 22 (8 from v1.0 Phase 1, 3 from Phase 6, 2 from Phase 7, 2 from Phase 8, 2 from Phase 9, 2 from Phase 10, 2 from Phase 11, 2 from Phase 12)
 - Average duration: ~2 minutes (Phase 12 Plan 01: ~3 min)
 - Total execution time: Not yet tracked
 
@@ -75,7 +75,7 @@ Progress: [█████░░░░░] 57% (Phase 6 complete, Phase 7 comple
 | 9. Sidebar Tree View | Complete (2/2) | 2026-02-17 | 2026-02-17 |
 | 10. Gone Branch Auto-Detection | Complete (2/2) | 2026-02-17 | 2026-02-17 |
 | 11. Event-Driven Auto-Cleanup | Complete (2/2) | 2026-02-17 | 2026-02-17 |
-| 12. Cleanup Rules UI | In Progress (1/?) | 2026-02-17 | - |
+| 12. Cleanup Rules UI | Complete (2/2) | 2026-02-17 | 2026-02-18 |
 | 13. Enhanced Comparison & Timeline | Pending | - | - |
 | 14. Platform Integration | Pending | - | - |
 
@@ -120,6 +120,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - **Phase 12 Plan 01 (DOM Methods for User Data)**: Use createElement/textContent/addEventListener instead of innerHTML with template literals — satisfies security hook and prevents XSS
 - **Phase 12 Plan 01 (Truthy-Only Conditions)**: conditions.merged and conditions.noRemote omitted when unchecked — only truthy values stored in conditions object
 - **Phase 12 Plan 01 (renderRules Init Call)**: renderRules() called at script init after const cleanupRules injection — existing rules display on load without user interaction
+- **Phase 12 Plan 02 (Branch Preview via textContent)**: Branch names in ruleEvaluationResult handler use li.textContent (not innerHTML) — consistent DOM pattern from Plan 01, inherently XSS-safe
+- **Phase 12 Plan 02 (importRules Validation)**: Filter-then-error approach — invalid entries silently filtered, error only if zero valid rules remain after filtering
+- **Phase 12 Plan 02 (Clipboard via Extension Host)**: vscode.env.clipboard used exclusively in extension host; navigator.clipboard not used in webview — correct VS Code extension pattern
+- **Phase 12 Plan 02 (pendingPreviewRuleId)**: Single variable tracks in-flight evaluateRule request — sufficient since user can only click one Preview at a time
 
 ### Pending Todos
 
@@ -139,14 +143,15 @@ None yet.
 - ✅ Plan 01: AutoCleanupEvaluator service, globToRegex/isExcluded utils, 3 new settings in package.json
 - ✅ Plan 02: AutoCleanupEvaluator wired into extension.ts with FETCH_HEAD and ORIG_HEAD watchers
 
-**Phase 12 (Cleanup Rules UI) — In Progress (1/? plans):**
+**Phase 12 (Cleanup Rules UI) — COMPLETE (2/2 plans):**
 - ✅ Plan 01: renderRules(), addCleanupRule() form builder, saveNewRule/toggleRule/deleteRule wired to saveCleanupRules
+- ✅ Plan 02: previewRule() with ruleEvaluationResult handler, exportRules/importRules clipboard commands, Preview/Export/Import toolbar buttons
 
 ## Session Continuity
 
-Last session: 2026-02-17
-Stopped at: Completed 12-01-PLAN.md — Phase 12 Plan 01 cleanup rules UI complete
-Resume: Proceed to Phase 12 Plan 02 (if exists) — dry-run preview in #preview-{ruleId} divs
+Last session: 2026-02-18
+Stopped at: Completed 12-02-PLAN.md — Phase 12 complete (all RULE-01 through RULE-05 satisfied)
+Resume: Proceed to Phase 13 (Enhanced Comparison & Timeline)
 
 ---
 
