@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { CleanupRule, BranchInfo } from '../types';
+import { safeRegexTest } from '../utils/regex';
 
 /**
  * Gets cleanup rules from extension storage.
@@ -38,12 +39,12 @@ export function evaluateCleanupRule(
     if (rule.conditions.olderThanDays && b.daysOld < rule.conditions.olderThanDays) return false;
     if (rule.conditions.noRemote && b.hasRemote) return false;
     if (rule.conditions.pattern) {
-      try {
-        const regex = new RegExp(rule.conditions.pattern);
-        if (!regex.test(b.name)) return false;
-      } catch {
+      const result = safeRegexTest(rule.conditions.pattern, b.name);
+      if (result.error) {
+        console.warn(`Skipping rule: invalid regex pattern - ${result.error}`);
         return false;
       }
+      if (!result.matches) return false;
     }
     return true;
   });

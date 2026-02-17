@@ -16,7 +16,7 @@ import {
 import { BRANCH_TEMPLATES } from './constants';
 
 // Utilities
-import { getNonce, formatAge, escapeHtml, getHealthColor } from './utils';
+import { getNonce, formatAge, escapeHtml, getHealthColor, validateRegexPattern } from './utils';
 
 // Git operations
 import {
@@ -428,6 +428,13 @@ async function showBranchManager(context: vscode.ExtensionContext) {
             const pattern = message.pattern;
             const replacement = message.replacement;
             const branchesToRename = message.branches as string[];
+
+            const validation = validateRegexPattern(pattern);
+            if (!validation.valid) {
+              vscode.window.showErrorMessage(`Invalid regex pattern: ${validation.error}`);
+              return;
+            }
+
             const regex = new RegExp(pattern);
 
             const renames: Array<{ old: string; new: string }> = [];
@@ -1280,6 +1287,39 @@ function getWebviewContent(
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
+    // Regex validation utility (client-side)
+    function validateRegexPattern(pattern) {
+      if (pattern.length > 200) {
+        return { valid: false, error: 'Pattern too long (max 200 characters)' };
+      }
+
+      // Detect ReDoS-prone patterns
+      const dangerousPatterns = [
+        /\\([^)]*[+*]\\)[+*{]/,         // (x+)+, (x+)*, (x*)+, (x*)*
+        /\\([^|]*\\|[^)]*\\)[+*{]/,      // (a|b)+, (a|b)*
+        /\\.\\*\\.\\*/,                     // .*.* (multiple unbounded wildcards)
+      ];
+
+      for (const dangerous of dangerousPatterns) {
+        if (dangerous.test(pattern)) {
+          return {
+            valid: false,
+            error: 'Pattern contains quantifiers that may cause performance issues',
+          };
+        }
+      }
+
+      try {
+        new RegExp(pattern);
+        return { valid: true };
+      } catch (e) {
+        return {
+          valid: false,
+          error: 'Invalid regex: ' + e.message,
+        };
+      }
+    }
+
     // Tab management
     function showTab(tabName) {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -1452,6 +1492,12 @@ function getWebviewContent(
     function selectByRegex() {
       const pattern = document.getElementById('regex-pattern').value;
       if (!pattern) return;
+
+      const validation = validateRegexPattern(pattern);
+      if (!validation.valid) {
+        alert('Invalid regex pattern: ' + validation.error);
+        return;
+      }
 
       try {
         const regex = new RegExp(pattern);
