@@ -12,6 +12,9 @@ import {
   DeletedBranchEntry,
 } from './types';
 
+// Services
+import { RepositoryContextManager } from './services';
+
 // Constants
 import { BRANCH_TEMPLATES } from './constants';
 
@@ -20,7 +23,6 @@ import { getNonce, formatAge, escapeHtml, getHealthColor, validateRegexPattern }
 
 // Git operations
 import {
-  getGitRoot,
   getCurrentBranch,
   getBaseBranch,
   getBranchInfo,
@@ -78,68 +80,77 @@ let gitHubSession: vscode.AuthenticationSession | undefined;
  * Activates the extension.
  * @param context - Extension context for subscriptions and state
  */
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
   incrementUsageCount(context);
 
-  const cleanupCommand = vscode.commands.registerCommand('git-branch-manager.cleanup', () => {
-    showBranchManager(context);
-  });
-  context.subscriptions.push(cleanupCommand);
-
-  const quickCleanupCommand = vscode.commands.registerCommand('git-branch-manager.quickCleanup', () => {
-    quickCleanup(context, updateGlobalStatusBar);
-  });
-  context.subscriptions.push(quickCleanupCommand);
-
-  const createBranchCommand = vscode.commands.registerCommand('git-branch-manager.createBranch', () => {
-    createBranchFromTemplate();
-  });
-  context.subscriptions.push(createBranchCommand);
-
-  const cleanRemotesCommand = vscode.commands.registerCommand('git-branch-manager.cleanRemotes', () => {
-    cleanRemoteBranches(context);
-  });
-  context.subscriptions.push(cleanRemotesCommand);
-
-  const manageWorktreesCommand = vscode.commands.registerCommand('git-branch-manager.manageWorktrees', () => {
-    showWorktreeManager(context);
-  });
-  context.subscriptions.push(manageWorktreesCommand);
-
-  const createWorktreeCommand = vscode.commands.registerCommand('git-branch-manager.createWorktree', () => {
-    createWorktreeFromBranch();
-  });
-  context.subscriptions.push(createWorktreeCommand);
-
-  const stashCommand = vscode.commands.registerCommand('git-branch-manager.stash', () => {
-    quickStash();
-  });
-  context.subscriptions.push(stashCommand);
-
-  const stashPopCommand = vscode.commands.registerCommand('git-branch-manager.stashPop', () => {
-    quickStashPop();
-  });
-  context.subscriptions.push(stashPopCommand);
-
-  const undoDeleteCommand = vscode.commands.registerCommand('git-branch-manager.undoDelete', async () => {
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    if (!workspaceFolder) return;
-    const gitRoot = await getGitRoot(workspaceFolder.uri.fsPath);
-    if (!gitRoot) return;
-    await undoLastDelete(context, gitRoot);
-    await updateGlobalStatusBar();
-  });
-  context.subscriptions.push(undoDeleteCommand);
+  const repoContext = new RepositoryContextManager(context);
+  await repoContext.discoverRepositories();
+  context.subscriptions.push(repoContext);
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = 'git-branch-manager.cleanup';
   globalStatusBarItem = statusBarItem;
-  updateStatusBar(statusBarItem);
-  statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
-  const statusBarInterval = setInterval(() => updateStatusBar(statusBarItem), 30000);
-  const healthCheckTimeout = setTimeout(() => checkBranchHealth(), 5000);
+  /**
+   * Updates the global status bar item using the current repo context.
+   */
+  async function updateGlobalStatusBar() {
+    await updateStatusBar(statusBarItem, repoContext);
+  }
+
+  updateGlobalStatusBar();
+
+  const cleanupCommand = vscode.commands.registerCommand('git-branch-manager.cleanup', () => {
+    showBranchManager(context, repoContext, updateGlobalStatusBar);
+  });
+  context.subscriptions.push(cleanupCommand);
+
+  const quickCleanupCommand = vscode.commands.registerCommand('git-branch-manager.quickCleanup', () => {
+    quickCleanup(repoContext, context, updateGlobalStatusBar);
+  });
+  context.subscriptions.push(quickCleanupCommand);
+
+  const createBranchCommand = vscode.commands.registerCommand('git-branch-manager.createBranch', () => {
+    createBranchFromTemplate(repoContext);
+  });
+  context.subscriptions.push(createBranchCommand);
+
+  const cleanRemotesCommand = vscode.commands.registerCommand('git-branch-manager.cleanRemotes', () => {
+    cleanRemoteBranches(repoContext, context);
+  });
+  context.subscriptions.push(cleanRemotesCommand);
+
+  const manageWorktreesCommand = vscode.commands.registerCommand('git-branch-manager.manageWorktrees', () => {
+    showWorktreeManager(repoContext, context);
+  });
+  context.subscriptions.push(manageWorktreesCommand);
+
+  const createWorktreeCommand = vscode.commands.registerCommand('git-branch-manager.createWorktree', () => {
+    createWorktreeFromBranch(repoContext);
+  });
+  context.subscriptions.push(createWorktreeCommand);
+
+  const stashCommand = vscode.commands.registerCommand('git-branch-manager.stash', () => {
+    quickStash(repoContext);
+  });
+  context.subscriptions.push(stashCommand);
+
+  const stashPopCommand = vscode.commands.registerCommand('git-branch-manager.stashPop', () => {
+    quickStashPop(repoContext);
+  });
+  context.subscriptions.push(stashPopCommand);
+
+  const undoDeleteCommand = vscode.commands.registerCommand('git-branch-manager.undoDelete', async () => {
+    const repo = await repoContext.getActiveRepository();
+    if (!repo) return;
+    await undoLastDelete(context, repo.path);
+    await updateGlobalStatusBar();
+  });
+  context.subscriptions.push(undoDeleteCommand);
+
+  const statusBarInterval = setInterval(() => updateGlobalStatusBar(), 30000);
+  const healthCheckTimeout = setTimeout(() => checkBranchHealth(repoContext), 5000);
 
   context.subscriptions.push({
     dispose: () => {
@@ -150,42 +161,43 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 /**
- * Updates the global status bar item.
- */
-async function updateGlobalStatusBar() {
-  if (globalStatusBarItem) {
-    await updateStatusBar(globalStatusBarItem);
-  }
-}
-
-/**
- * Updates the status bar with current branch cleanup count.
+ * Updates the status bar with aggregate branch cleanup count across all repositories.
  * @param statusBarItem - The status bar item to update
+ * @param repoContext - Repository context manager
  */
-async function updateStatusBar(statusBarItem: vscode.StatusBarItem) {
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders) {
-    statusBarItem.hide();
-    return;
-  }
+async function updateStatusBar(statusBarItem: vscode.StatusBarItem, repoContext: RepositoryContextManager) {
+  let allRepos = repoContext.getRepositories();
 
-  const gitRoot = await getGitRoot(workspaceFolders[0].uri.fsPath);
-  if (!gitRoot) {
-    statusBarItem.hide();
-    return;
+  if (allRepos.length === 0) {
+    await repoContext.discoverRepositories();
+    allRepos = repoContext.getRepositories();
+    if (allRepos.length === 0) {
+      statusBarItem.hide();
+      return;
+    }
   }
 
   try {
-    const branches = await getBranchInfo(gitRoot);
     const config = vscode.workspace.getConfiguration('gitBranchManager');
     const daysUntilStale = config.get<number>('daysUntilStale', 30);
-    const cleanupCount = branches.filter(
-      (b) => !b.isCurrentBranch && (b.isMerged || b.daysOld > daysUntilStale || b.remoteGone)
-    ).length;
+    let totalCleanupCount = 0;
 
-    if (cleanupCount > 0) {
-      statusBarItem.text = `$(git-branch) ${cleanupCount} to clean`;
-      statusBarItem.tooltip = `${cleanupCount} branches ready for cleanup`;
+    for (const repo of allRepos) {
+      try {
+        const branches = await getBranchInfo(repo.path);
+        totalCleanupCount += branches.filter(
+          (b) => !b.isCurrentBranch && (b.isMerged || b.daysOld > daysUntilStale || b.remoteGone)
+        ).length;
+      } catch {
+        // Skip repos with errors
+      }
+    }
+
+    if (totalCleanupCount > 0) {
+      statusBarItem.text = `$(git-branch) ${totalCleanupCount} to clean`;
+      statusBarItem.tooltip = allRepos.length === 1
+        ? `${totalCleanupCount} branches ready for cleanup`
+        : `${totalCleanupCount} branches across ${allRepos.length} repositories`;
       statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     } else {
       statusBarItem.text = '$(git-branch) Branches';
@@ -201,25 +213,26 @@ async function updateStatusBar(statusBarItem: vscode.StatusBarItem) {
 /**
  * Shows the branch manager webview panel.
  * @param context - Extension context for state management
+ * @param repoContext - Repository context manager
+ * @param updateGlobalStatusBar - Callback to update global status bar
  */
-async function showBranchManager(context: vscode.ExtensionContext) {
+async function showBranchManager(
+  context: vscode.ExtensionContext,
+  repoContext: RepositoryContextManager,
+  updateGlobalStatusBar: () => Promise<void>
+) {
   const panel = vscode.window.createWebviewPanel('branchManager', 'Git Branch Manager', vscode.ViewColumn.One, {
     enableScripts: true,
     retainContextWhenHidden: true,
   });
 
   async function updateWebview() {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders) {
+    const repo = await repoContext.getActiveRepository();
+    if (!repo) {
       panel.webview.html = getWebviewContent(panel.webview, [], [], [], [], {}, {}, 30, 60, null, '', {}, []);
       return;
     }
-
-    const gitRoot = await getGitRoot(workspaceFolders[0].uri.fsPath);
-    if (!gitRoot) {
-      panel.webview.html = getWebviewContent(panel.webview, [], [], [], [], {}, {}, 30, 60, null, '', {}, []);
-      return;
-    }
+    const gitRoot = repo.path;
 
     const config = vscode.workspace.getConfiguration('gitBranchManager');
     const daysUntilStale = config.get<number>('daysUntilStale', 30);
@@ -236,7 +249,7 @@ async function showBranchManager(context: vscode.ExtensionContext) {
 
     const branchNotesMap = getBranchNotes(context, gitRoot);
     const branchNotes: Record<string, BranchNote> = Object.fromEntries(branchNotesMap);
-    const cleanupRulesArray = getCleanupRules(context);
+    const cleanupRulesArray = getCleanupRules(context, gitRoot);
     const cleanupRules: Record<string, CleanupRule> = Object.fromEntries(
       cleanupRulesArray.map(rule => [rule.id, rule])
     );
@@ -263,11 +276,9 @@ async function showBranchManager(context: vscode.ExtensionContext) {
 
   panel.webview.onDidReceiveMessage(
     async (message) => {
-      const workspaceFolders = vscode.workspace.workspaceFolders;
-      if (!workspaceFolders) return;
-
-      const gitRoot = await getGitRoot(workspaceFolders[0].uri.fsPath);
-      if (!gitRoot) return;
+      const repo = await repoContext.getActiveRepository();
+      if (!repo) return;
+      const gitRoot = repo.path;
 
       switch (message.command) {
         case 'delete':
@@ -517,7 +528,7 @@ async function showBranchManager(context: vscode.ExtensionContext) {
           break;
 
         case 'saveCleanupRules':
-          await saveCleanupRules(context, message.rules);
+          await saveCleanupRules(context, gitRoot, message.rules);
           await updateWebview();
           break;
 
