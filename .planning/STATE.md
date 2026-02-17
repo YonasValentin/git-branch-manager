@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-02-17
 **Current Milestone:** v2.0 High-Value Features
-**Current Phase:** 12
+**Current Phase:** 11
 
 ## Project Reference
 
@@ -17,7 +17,7 @@ See: .planning/PROJECT.md (updated 2026-02-17)
 **Milestone:** v2.0 High-Value Features (Phases 6-14)
 **Phase:** 12 of 14 (Cleanup Rules UI) — Pending
 **Plan:** 0 of ? complete in phase 12
-**Status:** Phase 11 complete — ready for Phase 12 (Cleanup Rules UI)
+**Status:** Milestone complete
 **Last activity:** 2026-02-17 — Completed 11-02-PLAN.md (AutoCleanupEvaluator wired into extension.ts with FETCH_HEAD and ORIG_HEAD watchers)
 
 Progress: [█████░░░░░] 55% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plans 01+02 complete)

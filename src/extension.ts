@@ -1442,9 +1442,7 @@ function getWebviewContent(
 
       <div class="tool-card">
         <h3>🤖 Auto-Cleanup Rules</h3>
-        <div id="rules-container">
-          ${cleanupRulesArray.length === 0 ? '<p style="color: var(--vscode-descriptionForeground);">No rules configured</p>' : ''}
-        </div>
+        <div id="rules-container"></div>
         <button class="btn" onclick="addCleanupRule()">Add Rule</button>
       </div>
     </div>
@@ -1452,6 +1450,16 @@ function getWebviewContent(
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+
+    // HTML escape utility (client-side)
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
 
     // Regex validation utility (client-side)
     function validateRegexPattern(pattern) {
@@ -1680,9 +1688,238 @@ function getWebviewContent(
       }
     }
 
+    // Cleanup rule rendering
+    function renderRules() {
+      const container = document.getElementById('rules-container');
+      if (!container) return;
+      container.innerHTML = '';
+
+      if (cleanupRules.length === 0) {
+        const p = document.createElement('p');
+        p.style.color = 'var(--vscode-descriptionForeground)';
+        p.textContent = 'No rules configured. Click Add Rule to create one.';
+        container.appendChild(p);
+        return;
+      }
+
+      cleanupRules.forEach(rule => {
+        const item = document.createElement('div');
+        item.className = 'rule-item';
+
+        const header = document.createElement('div');
+        header.className = 'rule-header';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'rule-name';
+        nameSpan.textContent = rule.name;
+
+        const controls = document.createElement('div');
+
+        const toggleLabel = document.createElement('label');
+        toggleLabel.style.cssText = 'margin-right: 8px; font-size: 12px;';
+        const toggleInput = document.createElement('input');
+        toggleInput.type = 'checkbox';
+        toggleInput.checked = !!rule.enabled;
+        toggleInput.addEventListener('change', () => toggleRule(rule.id));
+        toggleLabel.appendChild(toggleInput);
+        toggleLabel.appendChild(document.createTextNode(' Enabled'));
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'action-btn';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteRule(rule.id));
+
+        controls.appendChild(toggleLabel);
+        controls.appendChild(deleteBtn);
+        header.appendChild(nameSpan);
+        header.appendChild(controls);
+
+        const conditionsDiv = document.createElement('div');
+        conditionsDiv.className = 'rule-conditions';
+        conditionsDiv.textContent = formatConditions(rule.conditions);
+
+        const previewDiv = document.createElement('div');
+        previewDiv.id = 'preview-' + rule.id;
+
+        item.appendChild(header);
+        item.appendChild(conditionsDiv);
+        item.appendChild(previewDiv);
+        container.appendChild(item);
+      });
+    }
+
+    function formatConditions(conditions) {
+      if (!conditions) return '(no conditions \u2014 matches all branches)';
+      const parts = [];
+      if (conditions.merged === true) parts.push('Is merged');
+      if (conditions.olderThanDays !== undefined && conditions.olderThanDays !== null) {
+        parts.push('Older than ' + conditions.olderThanDays + ' days');
+      }
+      if (conditions.pattern) parts.push('Name matches /' + conditions.pattern + '/');
+      if (conditions.noRemote === true) parts.push('No remote tracking branch');
+      return parts.length > 0 ? parts.join(' AND ') : '(no conditions \u2014 matches all branches)';
+    }
+
     function addCleanupRule() {
-      // TODO: Implement rule builder UI
-      alert('Rule builder coming soon');
+      const existing = document.getElementById('new-rule-form');
+      if (existing) {
+        existing.remove();
+        return;
+      }
+
+      const container = document.getElementById('rules-container');
+
+      const form = document.createElement('div');
+      form.id = 'new-rule-form';
+      form.style.cssText = 'background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 12px; margin-bottom: 8px;';
+
+      function makeRow(labelText, inputEl) {
+        const row = document.createElement('div');
+        row.className = 'filter-row';
+        row.style.marginBottom = '8px';
+        const lbl = document.createElement('label');
+        lbl.style.cssText = 'width: 160px; font-size: 12px;';
+        lbl.textContent = labelText;
+        row.appendChild(lbl);
+        row.appendChild(inputEl);
+        return row;
+      }
+
+      function makeCheckRow(labelText, inputId) {
+        const row = document.createElement('div');
+        row.className = 'filter-row';
+        row.style.marginBottom = '8px';
+        const lbl = document.createElement('label');
+        lbl.style.cssText = 'font-size: 12px;';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.id = inputId;
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(' ' + labelText));
+        row.appendChild(lbl);
+        return row;
+      }
+
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.id = 'new-rule-name';
+      nameInput.placeholder = 'e.g. Delete merged branches';
+      nameInput.style.flex = '1';
+      form.appendChild(makeRow('Rule name *', nameInput));
+
+      form.appendChild(makeCheckRow('Merged branches only', 'new-rule-merged'));
+
+      const daysInput = document.createElement('input');
+      daysInput.type = 'number';
+      daysInput.id = 'new-rule-days';
+      daysInput.placeholder = 'e.g. 30';
+      daysInput.min = '1';
+      daysInput.style.width = '100px';
+      form.appendChild(makeRow('Older than N days', daysInput));
+
+      const patternInput = document.createElement('input');
+      patternInput.type = 'text';
+      patternInput.id = 'new-rule-pattern';
+      patternInput.placeholder = 'e.g. ^feature/';
+      patternInput.style.flex = '1';
+      form.appendChild(makeRow('Name pattern (regex)', patternInput));
+
+      form.appendChild(makeCheckRow('No remote tracking branch', 'new-rule-no-remote'));
+
+      const errorDiv = document.createElement('div');
+      errorDiv.id = 'new-rule-error';
+      errorDiv.style.cssText = 'color: var(--vscode-errorForeground); font-size: 12px; margin-bottom: 8px; display: none;';
+      form.appendChild(errorDiv);
+
+      const btnRow = document.createElement('div');
+      btnRow.className = 'filter-row';
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn';
+      saveBtn.textContent = 'Save Rule';
+      saveBtn.addEventListener('click', saveNewRule);
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn';
+      cancelBtn.style.marginLeft = '8px';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', cancelNewRule);
+      btnRow.appendChild(saveBtn);
+      btnRow.appendChild(cancelBtn);
+      form.appendChild(btnRow);
+
+      container.parentNode.insertBefore(form, container);
+    }
+
+    function saveNewRule() {
+      const nameInput = document.getElementById('new-rule-name');
+      const mergedInput = document.getElementById('new-rule-merged');
+      const daysInput = document.getElementById('new-rule-days');
+      const patternInput = document.getElementById('new-rule-pattern');
+      const noRemoteInput = document.getElementById('new-rule-no-remote');
+      const errorDiv = document.getElementById('new-rule-error');
+
+      const name = nameInput.value.trim();
+      const daysRaw = daysInput.value.trim();
+      const pattern = patternInput.value.trim();
+
+      const showError = (msg) => {
+        errorDiv.textContent = msg;
+        errorDiv.style.display = 'block';
+      };
+      errorDiv.style.display = 'none';
+
+      if (!name) {
+        showError('Rule name is required.');
+        return;
+      }
+
+      let olderThanDays;
+      if (daysRaw !== '') {
+        const parsed = parseInt(daysRaw, 10);
+        if (isNaN(parsed) || parsed <= 0 || String(parsed) !== daysRaw) {
+          showError('Days must be a positive integer.');
+          return;
+        }
+        olderThanDays = parsed;
+      }
+
+      if (pattern) {
+        const validation = validateRegexPattern(pattern);
+        if (!validation.valid) {
+          showError('Invalid pattern: ' + validation.error);
+          return;
+        }
+      }
+
+      const conditions = {};
+      if (mergedInput.checked) conditions.merged = true;
+      if (olderThanDays !== undefined) conditions.olderThanDays = olderThanDays;
+      if (pattern) conditions.pattern = pattern;
+      if (noRemoteInput.checked) conditions.noRemote = true;
+
+      const newRule = {
+        id: 'rule-' + Date.now(),
+        name,
+        enabled: true,
+        action: 'delete',
+        conditions,
+      };
+
+      vscode.postMessage({ command: 'saveCleanupRules', rules: [...cleanupRules, newRule] });
+    }
+
+    function cancelNewRule() {
+      const form = document.getElementById('new-rule-form');
+      if (form) form.remove();
+    }
+
+    function toggleRule(ruleId) {
+      const updated = cleanupRules.map(r => r.id === ruleId ? Object.assign({}, r, { enabled: !r.enabled }) : r);
+      vscode.postMessage({ command: 'saveCleanupRules', rules: updated });
+    }
+
+    function deleteRule(ruleId) {
+      const updated = cleanupRules.filter(r => r.id !== ruleId);
+      vscode.postMessage({ command: 'saveCleanupRules', rules: updated });
     }
 
     // General actions
@@ -1696,7 +1933,7 @@ function getWebviewContent(
 
     // Load cleanup rules
     const cleanupRules = ${rulesJson};
-    // TODO: Render cleanup rules
+    renderRules();
   </script>
 </body>
 </html>`;
