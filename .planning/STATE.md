@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-02-17
 **Current Milestone:** v2.0 High-Value Features
-**Current Phase:** 11
+**Current Phase:** 12
 
 ## Project Reference
 
@@ -15,18 +15,18 @@ See: .planning/PROJECT.md (updated 2026-02-17)
 ## Current Position
 
 **Milestone:** v2.0 High-Value Features (Phases 6-14)
-**Phase:** 12 of 14 (Cleanup Rules UI) — Pending
-**Plan:** 0 of ? complete in phase 12
-**Status:** Milestone complete
-**Last activity:** 2026-02-17 — Completed 11-02-PLAN.md (AutoCleanupEvaluator wired into extension.ts with FETCH_HEAD and ORIG_HEAD watchers)
+**Phase:** 12 of 14 (Cleanup Rules UI) — In Progress
+**Plan:** 1 of ? complete in phase 12
+**Status:** In progress
+**Last activity:** 2026-02-17 — Completed 12-01-PLAN.md (DOM-based rule builder with toggle/delete cards and add-rule form)
 
-Progress: [█████░░░░░] 55% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plans 01+02 complete)
+Progress: [█████░░░░░] 57% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plans 01+02 complete, Phase 12 Plan 01 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 20 (8 from v1.0 Phase 1, 3 from Phase 6, 2 from Phase 7, 2 from Phase 8, 2 from Phase 9, 2 from Phase 10, 2 from Phase 11)
-- Average duration: ~2 minutes (Phase 11 Plan 02: ~1 min)
+- Total plans completed: 21 (8 from v1.0 Phase 1, 3 from Phase 6, 2 from Phase 7, 2 from Phase 8, 2 from Phase 9, 2 from Phase 10, 2 from Phase 11, 1 from Phase 12)
+- Average duration: ~2 minutes (Phase 12 Plan 01: ~3 min)
 - Total execution time: Not yet tracked
 
 **By Phase:**
@@ -40,6 +40,7 @@ Progress: [█████░░░░░] 55% (Phase 6 complete, Phase 7 comple
 | 9. Sidebar Tree View | 2/2 | Complete |
 | 10. Gone Branch Auto-Detection | 2/2 | Complete |
 | 11. Event-Driven Auto-Cleanup | 2/2 | Complete |
+| 12. Cleanup Rules UI | 1/? | In Progress |
 
 **Recent Trend:**
 - Phase 8 completed 2/2 plans in ~3 minutes each
@@ -49,6 +50,7 @@ Progress: [█████░░░░░] 55% (Phase 6 complete, Phase 7 comple
 - Phase 10 Plan 02 completed in 2 minutes
 - Phase 11 Plan 01 completed in ~2 minutes
 - Phase 11 Plan 02 completed in ~1 minute
+- Phase 12 Plan 01 completed in ~3 minutes
 - Trend: Stable, fast execution (avg ~2 min per plan)
 
 ## Progress
@@ -73,7 +75,7 @@ Progress: [█████░░░░░] 55% (Phase 6 complete, Phase 7 comple
 | 9. Sidebar Tree View | Complete (2/2) | 2026-02-17 | 2026-02-17 |
 | 10. Gone Branch Auto-Detection | Complete (2/2) | 2026-02-17 | 2026-02-17 |
 | 11. Event-Driven Auto-Cleanup | Complete (2/2) | 2026-02-17 | 2026-02-17 |
-| 12. Cleanup Rules UI | Pending | - | - |
+| 12. Cleanup Rules UI | In Progress (1/?) | 2026-02-17 | - |
 | 13. Enhanced Comparison & Timeline | Pending | - | - |
 | 14. Platform Integration | Pending | - | - |
 
@@ -115,6 +117,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - **Phase 11 Plan 02 (FETCH_HEAD Multi-Callback)**: Reuse existing FETCH_HEAD watcher — add autoCleanupEvaluator as second callback alongside goneDetector (no duplicate watcher)
 - **Phase 11 Plan 02 (ORIG_HEAD onDidCreate Only)**: ORIG_HEAD is recreated fresh on each git merge/reset — onDidCreate is sufficient; onDidChange would never fire
 - **Phase 11 Plan 02 (AutoCleanupEvaluator Positioning)**: Instantiated after goneDetector.initialize() and before watcher loops — consistent with Phase 10 GoneDetector positioning decision
+- **Phase 12 Plan 01 (DOM Methods for User Data)**: Use createElement/textContent/addEventListener instead of innerHTML with template literals — satisfies security hook and prevents XSS
+- **Phase 12 Plan 01 (Truthy-Only Conditions)**: conditions.merged and conditions.noRemote omitted when unchecked — only truthy values stored in conditions object
+- **Phase 12 Plan 01 (renderRules Init Call)**: renderRules() called at script init after const cleanupRules injection — existing rules display on load without user interaction
 
 ### Pending Todos
 
@@ -134,11 +139,14 @@ None yet.
 - ✅ Plan 01: AutoCleanupEvaluator service, globToRegex/isExcluded utils, 3 new settings in package.json
 - ✅ Plan 02: AutoCleanupEvaluator wired into extension.ts with FETCH_HEAD and ORIG_HEAD watchers
 
+**Phase 12 (Cleanup Rules UI) — In Progress (1/? plans):**
+- ✅ Plan 01: renderRules(), addCleanupRule() form builder, saveNewRule/toggleRule/deleteRule wired to saveCleanupRules
+
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 11-02-PLAN.md — Phase 11 Event-Driven Auto-Cleanup complete
-Resume: Proceed to Phase 12 — Cleanup Rules UI
+Stopped at: Completed 12-01-PLAN.md — Phase 12 Plan 01 cleanup rules UI complete
+Resume: Proceed to Phase 12 Plan 02 (if exists) — dry-run preview in #preview-{ruleId} divs
 
 ---
 
