@@ -2,10 +2,26 @@ import * as cp from 'child_process';
 import { promisify } from 'util';
 
 /**
- * Promisified exec for git commands.
- * Maintained for backwards compatibility with existing extension patterns.
+ * Promisified execFile for secure git command execution.
  */
-export const exec = promisify(cp.exec);
+const execFileAsync = promisify(cp.execFile);
+
+/**
+ * Executes a git command securely using execFile (no shell interpretation).
+ * @security Arguments passed as array, preventing shell injection.
+ * @param args - Git command arguments, e.g. ['branch', '-D', '--', branchName]
+ * @param cwd - Working directory
+ * @returns stdout trimmed
+ */
+export async function gitCommand(args: string[], cwd: string): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, { cwd });
+  return stdout.trim();
+}
+
+/**
+ * Export execFile for callers that need full {stdout, stderr} object.
+ */
+export { execFileAsync as execFile };
 
 /**
  * Gets the Git root directory for the current workspace.
@@ -13,8 +29,7 @@ export const exec = promisify(cp.exec);
  */
 export async function getGitRoot(workspacePath: string): Promise<string | undefined> {
   try {
-    const { stdout } = await exec('git rev-parse --show-toplevel', { cwd: workspacePath });
-    return stdout.trim();
+    return await gitCommand(['rev-parse', '--show-toplevel'], workspacePath);
   } catch {
     return undefined;
   }
@@ -26,8 +41,7 @@ export async function getGitRoot(workspacePath: string): Promise<string | undefi
  * @returns Current branch name
  */
 export async function getCurrentBranch(cwd: string): Promise<string> {
-  const { stdout } = await exec('git branch --show-current', { cwd });
-  return stdout.trim();
+  return await gitCommand(['branch', '--show-current'], cwd);
 }
 
 /**
@@ -37,10 +51,10 @@ export async function getCurrentBranch(cwd: string): Promise<string> {
  */
 export async function getBaseBranch(cwd: string): Promise<string> {
   try {
-    const { stdout } = await exec('git symbolic-ref refs/remotes/origin/HEAD', { cwd });
-    return stdout.trim().replace('refs/remotes/origin/', '');
+    const stdout = await gitCommand(['symbolic-ref', 'refs/remotes/origin/HEAD'], cwd);
+    return stdout.replace('refs/remotes/origin/', '');
   } catch {
-    const { stdout } = await exec('git branch -r', { cwd });
+    const stdout = await gitCommand(['branch', '-r'], cwd);
     if (stdout.includes('origin/main')) return 'main';
     if (stdout.includes('origin/master')) return 'master';
     return 'main';

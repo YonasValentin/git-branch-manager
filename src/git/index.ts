@@ -4,7 +4,7 @@
  */
 
 // Core utilities
-export { exec, getGitRoot, getCurrentBranch, getBaseBranch } from './core';
+export { gitCommand, execFile, getGitRoot, getCurrentBranch, getBaseBranch } from './core';
 
 // Health scoring
 export { calculateHealthScore, getHealthStatus, getHealthReason, extractIssueFromBranch } from './health';
