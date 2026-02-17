@@ -13,7 +13,7 @@ import {
 } from './types';
 
 // Services
-import { RepositoryContextManager } from './services';
+import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem } from './services';
 
 // Constants
 import { BRANCH_TEMPLATES } from './constants';
@@ -100,6 +100,36 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   updateGlobalStatusBar();
+
+  // Tree view (TREE-04, TREE-05)
+  const branchTreeProvider = new BranchTreeProvider(repoContext);
+  const branchTreeView = vscode.window.createTreeView('git-branch-manager.branchTree', {
+    treeDataProvider: branchTreeProvider,
+    showCollapseAll: true,
+  });
+  context.subscriptions.push(branchTreeView, branchTreeProvider);
+
+  // File watchers for auto-refresh (TREE-05)
+  for (const repo of repoContext.getRepositories()) {
+    const refsPattern = new vscode.RelativePattern(repo.path, '.git/refs/heads/**');
+    const headPattern = new vscode.RelativePattern(repo.path, '.git/HEAD');
+    const packedPattern = new vscode.RelativePattern(repo.path, '.git/packed-refs');
+
+    const refsWatcher = vscode.workspace.createFileSystemWatcher(refsPattern);
+    const headWatcher = vscode.workspace.createFileSystemWatcher(headPattern);
+    const packedWatcher = vscode.workspace.createFileSystemWatcher(packedPattern);
+
+    const scheduleRefresh = () => branchTreeProvider.scheduleRefresh();
+
+    context.subscriptions.push(
+      refsWatcher.onDidCreate(scheduleRefresh),
+      refsWatcher.onDidDelete(scheduleRefresh),
+      refsWatcher.onDidChange(scheduleRefresh),
+      headWatcher.onDidChange(scheduleRefresh),
+      packedWatcher.onDidChange(scheduleRefresh),
+      refsWatcher, headWatcher, packedWatcher
+    );
+  }
 
   const cleanupCommand = vscode.commands.registerCommand('git-branch-manager.cleanup', () => {
     showBranchManager(context, repoContext, updateGlobalStatusBar);
