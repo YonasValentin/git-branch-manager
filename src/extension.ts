@@ -698,6 +698,55 @@ async function showBranchManager(
           });
           break;
 
+        case 'exportRules': {
+          const exportedRules = getCleanupRules(context, gitRoot);
+          await vscode.env.clipboard.writeText(JSON.stringify(exportedRules, null, 2));
+          vscode.window.showInformationMessage(`Exported ${exportedRules.length} rule(s) to clipboard`);
+          break;
+        }
+
+        case 'importRules': {
+          const clipboardText = await vscode.env.clipboard.readText();
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(clipboardText);
+          } catch {
+            vscode.window.showErrorMessage('Clipboard does not contain valid JSON');
+            break;
+          }
+          if (!Array.isArray(parsed)) {
+            vscode.window.showErrorMessage('Imported JSON must be an array of rules');
+            break;
+          }
+          const imported = (parsed as unknown[]).filter(
+            (entry): entry is CleanupRule =>
+              entry !== null &&
+              typeof entry === 'object' &&
+              typeof (entry as Record<string, unknown>).id === 'string' &&
+              typeof (entry as Record<string, unknown>).name === 'string' &&
+              typeof (entry as Record<string, unknown>).enabled === 'boolean' &&
+              (entry as Record<string, unknown>).conditions !== null &&
+              typeof (entry as Record<string, unknown>).conditions === 'object'
+          );
+          if (imported.length === 0) {
+            vscode.window.showErrorMessage('No valid rules found in clipboard JSON');
+            break;
+          }
+          const existingRules = getCleanupRules(context, gitRoot);
+          if (existingRules.length > 0) {
+            const answer = await vscode.window.showWarningMessage(
+              `Replace ${existingRules.length} existing rule(s) with ${imported.length} imported?`,
+              { modal: true },
+              'Replace'
+            );
+            if (answer !== 'Replace') break;
+          }
+          await saveCleanupRules(context, gitRoot, imported);
+          await updateWebview();
+          vscode.window.showInformationMessage(`Imported ${imported.length} rule(s)`);
+          break;
+        }
+
         case 'connectGitHub':
           try {
             gitHubSession = await vscode.authentication.getSession('github', ['repo'], { createIfNone: true });
@@ -1443,7 +1492,11 @@ function getWebviewContent(
       <div class="tool-card">
         <h3>🤖 Auto-Cleanup Rules</h3>
         <div id="rules-container"></div>
-        <button class="btn" onclick="addCleanupRule()">Add Rule</button>
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <button class="btn" onclick="addCleanupRule()">Add Rule</button>
+          <button class="btn btn-secondary" onclick="exportRules()">Export to Clipboard</button>
+          <button class="btn btn-secondary" onclick="importRules()">Import from Clipboard</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1724,12 +1777,18 @@ function getWebviewContent(
         toggleLabel.appendChild(toggleInput);
         toggleLabel.appendChild(document.createTextNode(' Enabled'));
 
+        const previewBtn = document.createElement('button');
+        previewBtn.className = 'action-btn';
+        previewBtn.textContent = 'Preview';
+        previewBtn.addEventListener('click', () => previewRule(rule.id));
+
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'action-btn';
         deleteBtn.textContent = 'Delete';
         deleteBtn.addEventListener('click', () => deleteRule(rule.id));
 
         controls.appendChild(toggleLabel);
+        controls.appendChild(previewBtn);
         controls.appendChild(deleteBtn);
         header.appendChild(nameSpan);
         header.appendChild(controls);
@@ -1921,6 +1980,61 @@ function getWebviewContent(
       const updated = cleanupRules.filter(r => r.id !== ruleId);
       vscode.postMessage({ command: 'saveCleanupRules', rules: updated });
     }
+
+    // Dry-run preview
+    var pendingPreviewRuleId = null;
+
+    function previewRule(ruleId) {
+      const rule = cleanupRules.find(r => r.id === ruleId);
+      if (!rule) return;
+      pendingPreviewRuleId = ruleId;
+      vscode.postMessage({ command: 'evaluateRule', rule: rule });
+    }
+
+    // Import/export clipboard
+    function exportRules() {
+      vscode.postMessage({ command: 'exportRules' });
+    }
+
+    function importRules() {
+      vscode.postMessage({ command: 'importRules' });
+    }
+
+    // Extension host message listener
+    window.addEventListener('message', function(event) {
+      const msg = event.data;
+      switch (msg.command) {
+        case 'ruleEvaluationResult': {
+          if (!pendingPreviewRuleId) break;
+          const previewDiv = document.getElementById('preview-' + pendingPreviewRuleId);
+          if (previewDiv) {
+            previewDiv.innerHTML = '';
+            const matches = msg.matches;
+            if (!matches || matches.length === 0) {
+              const p = document.createElement('p');
+              p.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 6px;';
+              p.textContent = 'No branches match this rule';
+              previewDiv.appendChild(p);
+            } else {
+              const summary = document.createElement('p');
+              summary.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 6px;';
+              summary.textContent = matches.length + ' branch' + (matches.length !== 1 ? 'es' : '') + ' would be deleted:';
+              previewDiv.appendChild(summary);
+              const list = document.createElement('ul');
+              list.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 4px; padding-left: 20px;';
+              matches.forEach(function(name) {
+                const li = document.createElement('li');
+                li.textContent = name;
+                list.appendChild(li);
+              });
+              previewDiv.appendChild(list);
+            }
+          }
+          pendingPreviewRuleId = null;
+          break;
+        }
+      }
+    });
 
     // General actions
     function refresh() {
