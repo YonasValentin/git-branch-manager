@@ -236,30 +236,9 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('git-branch-manager.treeCompareBranch', async (item: BranchItem) => {
       if (!item?.branch?.name || !item?.repoPath) return;
 
-      try {
-        const currentBranch = await getCurrentBranch(item.repoPath);
-        if (!currentBranch) {
-          vscode.window.showErrorMessage('Could not determine current branch');
-          return;
-        }
-        const comparison = await compareBranches(item.repoPath, currentBranch, item.branch.name);
-        const output = vscode.window.createOutputChannel('Branch Comparison');
-        output.clear();
-        output.appendLine(`Comparing: ${currentBranch} <-> ${item.branch.name}`);
-        output.appendLine(`─────────────────────────────────`);
-        output.appendLine(`Ahead: ${comparison.ahead} commits`);
-        output.appendLine(`Behind: ${comparison.behind} commits`);
-        if (comparison.files && comparison.files.length > 0) {
-          output.appendLine(`\nChanged files (${comparison.files.length}):`);
-          for (const file of comparison.files) {
-            output.appendLine(`  [${file.status}] ${file.path}`);
-          }
-        }
-        output.show();
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        vscode.window.showErrorMessage(`Failed to compare branches: ${msg}`);
-      }
+      // Show webview and guide user to Compare tab (COMP-03)
+      await vscode.commands.executeCommand('git-branch-manager.cleanup');
+      vscode.window.showInformationMessage(`Compare "${item.branch.name}" with current branch using the Compare tab in Branch Manager.`);
     }),
   );
 
@@ -794,6 +773,29 @@ async function showBranchManager(
           const { branchName, commitHash } = message;
           await removeRecoveryEntry(context, gitRoot, branchName, commitHash);
           await updateWebview();
+          break;
+        }
+
+        case 'openDiff': {
+          const { branchA, branchB, filePath } = message;
+          // Handle renamed files (R status): path is "oldPath\tnewPath"
+          const paths = (filePath as string).split('\t');
+          const fileInA = paths.length > 1 ? paths[1] : paths[0]; // new path in branchA
+          const fileInB = paths[0]; // old path in branchB
+
+          const leftParams = `branch=${encodeURIComponent(branchB)}&file=${encodeURIComponent(fileInB)}&repo=${encodeURIComponent(gitRoot)}`;
+          const rightParams = `branch=${encodeURIComponent(branchA)}&file=${encodeURIComponent(fileInA)}&repo=${encodeURIComponent(gitRoot)}`;
+
+          const leftUri = vscode.Uri.parse(`${GIT_DIFF_SCHEME}:${encodeURIComponent(fileInB)}?${leftParams}`);
+          const rightUri = vscode.Uri.parse(`${GIT_DIFF_SCHEME}:${encodeURIComponent(fileInA)}?${rightParams}`);
+
+          const displayFile = paths.length > 1 ? `${fileInB} \u2192 ${fileInA}` : fileInA;
+          await vscode.commands.executeCommand(
+            'vscode.diff',
+            leftUri,
+            rightUri,
+            `${displayFile} (${branchB} \u2194 ${branchA})`
+          );
           break;
         }
       }
@@ -2129,7 +2131,7 @@ function getWebviewContent(
             const filesH3 = document.createElement('h3');
             filesH3.textContent = 'Changed files (' + data.files.length + ')';
             filesSection.appendChild(filesH3);
-            renderFileChanges(data.files, filesSection);
+            renderFileChanges(data.files, filesSection, data.branchA, data.branchB);
             resultsContainer.appendChild(filesSection);
           }
 
@@ -2217,7 +2219,7 @@ function getWebviewContent(
       });
     }
 
-    function renderFileChanges(files, container) {
+    function renderFileChanges(files, container, branchA, branchB) {
       files.forEach(function(f) {
         const row = document.createElement('div');
         row.className = 'file-change-row';
@@ -2229,6 +2231,20 @@ function getWebviewContent(
         pathSpan.textContent = f.path;
         row.appendChild(badge);
         row.appendChild(pathSpan);
+        if (branchA && branchB) {
+          const diffBtn = document.createElement('button');
+          diffBtn.className = 'action-btn';
+          diffBtn.textContent = 'Diff';
+          diffBtn.addEventListener('click', function() {
+            vscode.postMessage({
+              command: 'openDiff',
+              branchA: branchA,
+              branchB: branchB,
+              filePath: f.path
+            });
+          });
+          row.appendChild(diffBtn);
+        }
         container.appendChild(row);
       });
     }
