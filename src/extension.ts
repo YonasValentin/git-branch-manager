@@ -13,7 +13,7 @@ import {
 } from './types';
 
 // Services
-import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem, GoneDetector, AutoCleanupEvaluator } from './services';
+import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem, GoneDetector, AutoCleanupEvaluator, DiffContentProvider, GIT_DIFF_SCHEME } from './services';
 
 // Constants
 import { BRANCH_TEMPLATES } from './constants';
@@ -87,6 +87,12 @@ export async function activate(context: vscode.ExtensionContext) {
   const repoContext = new RepositoryContextManager(context);
   await repoContext.discoverRepositories();
   context.subscriptions.push(repoContext);
+
+  // Register DiffContentProvider for virtual diff documents (COMP-03)
+  const diffProvider = new DiffContentProvider();
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(GIT_DIFF_SCHEME, diffProvider)
+  );
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = 'git-branch-manager.cleanup';
