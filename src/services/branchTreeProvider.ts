@@ -132,7 +132,18 @@ export class BranchTreeProvider
   /** Pending debounce handle. */
   private refreshTimeout: ReturnType<typeof setTimeout> | undefined;
 
+  /** Stored PR/MR statuses to apply to branches on next refresh. */
+  private prStatuses: Map<string, import('../types').PRStatus> = new Map();
+
   constructor(private readonly repoContext: RepositoryContextManager) {}
+
+  /**
+   * Stores platform PR/MR statuses to apply to branches on next refresh.
+   * Call this from extension.ts after fetching PR data, then call scheduleRefresh().
+   */
+  setPRStatuses(prMap: Map<string, import('../types').PRStatus>): void {
+    this.prStatuses = prMap;
+  }
 
   /**
    * Debounced refresh — coalesces rapid change events into a single update.
@@ -231,6 +242,12 @@ export class BranchTreeProvider
       branches = await getBranchInfo(repo.path);
     } catch {
       return [];
+    }
+
+    // Apply stored PR statuses to branches
+    for (const branch of branches) {
+      const pr = this.prStatuses.get(branch.name);
+      if (pr) { branch.prStatus = pr; }
     }
 
     const merged: BranchInfo[] = [];

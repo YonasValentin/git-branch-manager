@@ -41,6 +41,9 @@ import {
   deleteBranchForce,
   getGitHubInfo,
   fetchGitHubPRs,
+  detectPlatform,
+  fetchGitLabMRs,
+  fetchAzurePRs,
   calculateHealthScore,
   getHealthStatus,
   getHealthReason,
@@ -87,6 +90,10 @@ export async function activate(context: vscode.ExtensionContext) {
   const repoContext = new RepositoryContextManager(context);
   await repoContext.discoverRepositories();
   context.subscriptions.push(repoContext);
+
+  // PAT secret storage keys
+  const GITLAB_TOKEN_KEY = 'gitBranchManager.gitlabToken';
+  const AZURE_TOKEN_KEY = 'gitBranchManager.azureToken';
 
   // Register DiffContentProvider for virtual diff documents (COMP-03)
   const diffProvider = new DiffContentProvider();
@@ -242,8 +249,72 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // Platform connection command (PLAT-04)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('git-branch-manager.connectPlatform', async () => {
+      const repo = await repoContext.getActiveRepository();
+      if (!repo) { return; }
+      const platformInfo = await detectPlatform(repo.path);
+
+      if (platformInfo.platform === 'github') {
+        gitHubSession = await vscode.authentication.getSession('github', ['repo'], { createIfNone: true });
+        if (gitHubSession) { vscode.window.showInformationMessage('Connected to GitHub'); }
+      } else if (platformInfo.platform === 'gitlab') {
+        const token = await vscode.window.showInputBox({
+          title: 'GitLab Personal Access Token',
+          prompt: 'Enter a GitLab PAT with read_api scope. Stored securely in OS keychain.',
+          password: true,
+          ignoreFocusOut: true,
+        });
+        if (token) {
+          await context.secrets.store(GITLAB_TOKEN_KEY, token);
+          vscode.window.showInformationMessage('Connected to GitLab');
+        }
+      } else if (platformInfo.platform === 'azure') {
+        const token = await vscode.window.showInputBox({
+          title: 'Azure DevOps Personal Access Token',
+          prompt: 'Enter an Azure DevOps PAT with Code (Read) scope. Stored securely in OS keychain.',
+          password: true,
+          ignoreFocusOut: true,
+        });
+        if (token) {
+          await context.secrets.store(AZURE_TOKEN_KEY, token);
+          vscode.window.showInformationMessage('Connected to Azure DevOps');
+        }
+      } else {
+        vscode.window.showWarningMessage('No recognized git platform detected from remote URL.');
+      }
+    })
+  );
+
+  // Open PR/MR in browser command (PLAT-04)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('git-branch-manager.openPR', (item: BranchItem) => {
+      const prUrl = item?.branch?.prStatus?.url;
+      if (prUrl) {
+        vscode.env.openExternal(vscode.Uri.parse(prUrl));
+      } else {
+        vscode.window.showInformationMessage('No PR/MR associated with this branch.');
+      }
+    })
+  );
+
+  // Clear platform token command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('git-branch-manager.clearPlatformToken', async () => {
+      const platform = await vscode.window.showQuickPick(['GitLab', 'Azure DevOps'], { placeHolder: 'Select platform to disconnect' });
+      if (platform === 'GitLab') {
+        await context.secrets.delete(GITLAB_TOKEN_KEY);
+        vscode.window.showInformationMessage('GitLab token cleared.');
+      } else if (platform === 'Azure DevOps') {
+        await context.secrets.delete(AZURE_TOKEN_KEY);
+        vscode.window.showInformationMessage('Azure DevOps token cleared.');
+      }
+    })
+  );
+
   const cleanupCommand = vscode.commands.registerCommand('git-branch-manager.cleanup', () => {
-    showBranchManager(context, repoContext, updateGlobalStatusBar);
+    showBranchManager(context, repoContext, updateGlobalStatusBar, branchTreeProvider, GITLAB_TOKEN_KEY, AZURE_TOKEN_KEY);
   });
   context.subscriptions.push(cleanupCommand);
 
@@ -356,11 +427,17 @@ async function updateStatusBar(statusBarItem: vscode.StatusBarItem, repoContext:
  * @param context - Extension context for state management
  * @param repoContext - Repository context manager
  * @param updateGlobalStatusBar - Callback to update global status bar
+ * @param branchTreeProvider - Tree view provider for PR status injection
+ * @param gitlabTokenKey - Secret storage key for GitLab PAT
+ * @param azureTokenKey - Secret storage key for Azure DevOps PAT
  */
 async function showBranchManager(
   context: vscode.ExtensionContext,
   repoContext: RepositoryContextManager,
-  updateGlobalStatusBar: () => Promise<void>
+  updateGlobalStatusBar: () => Promise<void>,
+  branchTreeProvider: BranchTreeProvider,
+  gitlabTokenKey: string,
+  azureTokenKey: string
 ) {
   const panel = vscode.window.createWebviewPanel('branchManager', 'Git Branch Manager', vscode.ViewColumn.One, {
     enableScripts: true,
@@ -388,6 +465,38 @@ async function showBranchManager(
       getBaseBranch(gitRoot),
       getAllBranchNames(gitRoot),
     ]);
+
+    // Platform-aware PR fetching (PLAT-01, PLAT-02, PLAT-03, PLAT-05)
+    const platformInfo = await detectPlatform(gitRoot);
+    let prMap = new Map<string, PRStatus>();
+    const branchNames = branches.map(b => b.name);
+
+    if (platformInfo.platform === 'github') {
+      const token = gitHubSession?.accessToken;
+      if (platformInfo.owner && platformInfo.repo) {
+        prMap = await fetchGitHubPRs(platformInfo.owner, platformInfo.repo, branchNames, token);
+      }
+    } else if (platformInfo.platform === 'gitlab') {
+      const token = await context.secrets.get(gitlabTokenKey);
+      if (token && platformInfo.gitlabHost && platformInfo.projectPath) {
+        prMap = await fetchGitLabMRs(platformInfo.gitlabHost, platformInfo.projectPath, branchNames, token);
+      }
+    } else if (platformInfo.platform === 'azure') {
+      const token = await context.secrets.get(azureTokenKey);
+      if (token && platformInfo.organization && platformInfo.project && platformInfo.azureRepo) {
+        prMap = await fetchAzurePRs(platformInfo.organization, platformInfo.project, platformInfo.azureRepo, branchNames, token);
+      }
+    }
+
+    // Apply PR status to branches for webview rendering
+    for (const branch of branches) {
+      const pr = prMap.get(branch.name);
+      if (pr) { branch.prStatus = pr; }
+    }
+
+    // Push PR data to tree view as well
+    branchTreeProvider.setPRStatuses(prMap);
+    branchTreeProvider.scheduleRefresh();
 
     const branchNotesMap = getBranchNotes(context, gitRoot);
     const branchNotes: Record<string, BranchNote> = Object.fromEntries(branchNotesMap);
