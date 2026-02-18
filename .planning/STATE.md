@@ -16,17 +16,17 @@ See: .planning/PROJECT.md (updated 2026-02-17)
 
 **Milestone:** v2.0 High-Value Features (Phases 6-14)
 **Phase:** 13 of 14 (Enhanced Comparison & Timeline) — In Progress
-**Plan:** 1 of ? complete in phase 13
+**Plan:** 2 of ? complete in phase 13
 **Status:** In Progress
-**Last activity:** 2026-02-18 — Completed 13-01-PLAN.md (branch timeline tooltips via resolveTreeItem, Compare tab in webview)
+**Last activity:** 2026-02-18 — Completed 13-02-PLAN.md (DiffContentProvider, openDiff handler, Diff buttons on file rows, COMP-03 satisfied)
 
-Progress: [██████░░░░] 71% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plans 01+02 complete, Phase 12 Plans 01+02 complete, Phase 13 Plan 01 complete)
+Progress: [██████░░░░] 73% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plans 01+02 complete, Phase 12 Plans 01+02 complete, Phase 13 Plans 01+02 complete)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 22 (8 from v1.0 Phase 1, 3 from Phase 6, 2 from Phase 7, 2 from Phase 8, 2 from Phase 9, 2 from Phase 10, 2 from Phase 11, 2 from Phase 12)
-- Average duration: ~2 minutes (Phase 12 Plan 01: ~3 min)
+- Total plans completed: 23 (8 from v1.0 Phase 1, 3 from Phase 6, 2 from Phase 7, 2 from Phase 8, 2 from Phase 9, 2 from Phase 10, 2 from Phase 11, 2 from Phase 12, 2 from Phase 13)
+- Average duration: ~2 minutes (Phase 13 Plan 02: ~2 min)
 - Total execution time: Not yet tracked
 
 **By Phase:**
@@ -41,7 +41,7 @@ Progress: [██████░░░░] 71% (Phase 6 complete, Phase 7 comple
 | 10. Gone Branch Auto-Detection | 2/2 | Complete |
 | 11. Event-Driven Auto-Cleanup | 2/2 | Complete |
 | 12. Cleanup Rules UI | 2/2 | Complete |
-| 13. Enhanced Comparison & Timeline | 1/? | In Progress |
+| 13. Enhanced Comparison & Timeline | 2/? | In Progress |
 
 **Recent Trend:**
 - Phase 8 completed 2/2 plans in ~3 minutes each
@@ -130,6 +130,11 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - **Phase 13 Plan 01 (resolveTreeItem)**: Replaces eager tooltip with lazy one — constructor tooltip remains as fallback for immediate display
 - **Phase 13 Plan 01 (compareBranches handler)**: Upgraded from showInformationMessage stub to postMessage with full ComparisonResult data
 - **Phase 13 Plan 01 (allBranchNames injection)**: Fetched via Promise.all in updateWebview, injected as JSON constant for Compare tab dropdowns
+- **Phase 13 Plan 02 (URI query params for diff)**: Use query params for branch/file/repo in git-branch-manager-diff scheme — avoids encoding pitfall with slash-containing branch names
+- **Phase 13 Plan 02 (encodeURIComponent)**: Applied to both branch names and file paths in URI query params and URI path component
+- **Phase 13 Plan 02 (renamed file handling)**: Split filePath on tab — first part = old path for branchB side, second part = new path for branchA side
+- **Phase 13 Plan 02 (treeCompareBranch)**: Replaced OutputChannel stub with git-branch-manager.cleanup command pointer to webview Compare tab
+- **Phase 13 Plan 02 (Diff button DOM pattern)**: addEventListener used (not inline onclick) — consistent with Phase 12 DOM-safe pattern; renderFileChanges accepts branchA/branchB params
 
 ### Pending Todos
 
@@ -153,14 +158,15 @@ None yet.
 - ✅ Plan 01: renderRules(), addCleanupRule() form builder, saveNewRule/toggleRule/deleteRule wired to saveCleanupRules
 - ✅ Plan 02: previewRule() with ruleEvaluationResult handler, exportRules/importRules clipboard commands, Preview/Export/Import toolbar buttons
 
-**Phase 13 (Enhanced Comparison & Timeline) — IN PROGRESS (1/? plans):**
+**Phase 13 (Enhanced Comparison & Timeline) — IN PROGRESS (2/? plans):**
 - ✅ Plan 01: getBranchTimeline(), resolveTreeItem() on BranchTreeProvider, Compare tab in webview, comparisonResult/timelineResult handlers
+- ✅ Plan 02: DiffContentProvider with git-branch-manager-diff scheme, openDiff message handler, Diff buttons on file change rows, treeCompareBranch upgraded to webview pointer (COMP-03)
 
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed 13-01-PLAN.md — Phase 13 Plan 01 complete (TIME-01/02/03, COMP-01/02 satisfied)
-Resume: Proceed to Phase 13 Plan 02 (if exists) or Phase 14 (Platform Integration)
+Stopped at: Completed 13-02-PLAN.md — Phase 13 Plan 02 complete (COMP-03 satisfied)
+Resume: Proceed to Phase 13 Plan 03 (if exists) or Phase 14 (Platform Integration)
 
 ---
 
