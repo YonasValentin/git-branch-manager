@@ -37,3 +37,13 @@ export { getWorktreeInfo } from './worktree';
 
 // GitHub integration
 export { getGitHubInfo, fetchGitHubPRs } from './github';
+
+// Platform detection
+export { detectPlatform } from './platformDetect';
+export type { Platform, PlatformInfo } from './platformDetect';
+
+// GitLab integration
+export { fetchGitLabMRs } from './gitlab';
+
+// Azure DevOps integration
+export { fetchAzurePRs } from './azure';
