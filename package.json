@@ -140,6 +140,21 @@
       {
         "command": "git-branch-manager.cleanGoneBranches",
         "title": "Git Branch Manager: Clean Gone Branches"
+      },
+      {
+        "command": "git-branch-manager.connectPlatform",
+        "title": "Git Branch Manager: Connect Platform (GitLab/Azure DevOps)",
+        "category": "Git Branch Manager"
+      },
+      {
+        "command": "git-branch-manager.openPR",
+        "title": "Git Branch Manager: Open PR/MR in Browser",
+        "category": "Git Branch Manager"
+      },
+      {
+        "command": "git-branch-manager.clearPlatformToken",
+        "title": "Git Branch Manager: Clear Platform Token",
+        "category": "Git Branch Manager"
       }
     ],
     "menus": {
@@ -170,6 +185,11 @@
           "command": "git-branch-manager.treeCompareBranch",
           "when": "view == git-branch-manager.branchTree && viewItem == branch",
           "group": "1_branch@3"
+        },
+        {
+          "command": "git-branch-manager.openPR",
+          "when": "view == git-branch-manager.branchTree && viewItem == branch",
+          "group": "2_pr@1"
         }
       ],
       "view/title": [
@@ -231,6 +251,18 @@
         {
           "command": "git-branch-manager.cleanGoneBranches",
           "when": "false"
+        },
+        {
+          "command": "git-branch-manager.openPR",
+          "when": "false"
+        },
+        {
+          "command": "git-branch-manager.connectPlatform",
+          "when": "gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "git-branch-manager.clearPlatformToken",
+          "when": "gitOpenRepositoryCount != 0"
         }
       ]
     },
