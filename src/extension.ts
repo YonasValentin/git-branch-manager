@@ -876,6 +876,10 @@ async function showBranchManager(
           }
           break;
 
+        case 'createBranch':
+          void createBranchFromTemplate(repoContext);
+          break;
+
         case 'openSupport':
           void vscode.env.openExternal(vscode.Uri.parse('https://www.buymeacoffee.com/YonasValentin'));
           break;
@@ -985,53 +989,76 @@ function getWebviewContent(
 ): string {
   const nonce = getNonce();
 
-  const mergedBranches = branches.filter((b) => b.isMerged && !b.isCurrentBranch);
-  const staleBranches = branches.filter((b) => !b.isMerged && b.daysOld > daysUntilStale && !b.isCurrentBranch);
-  const goneBranches = branches.filter((b) => b.remoteGone && !b.isCurrentBranch);
-  const activeBranches = branches.filter((b) => !b.isMerged && b.daysOld <= daysUntilStale && !b.remoteGone);
+  const protectedNames = ['main', 'master', 'develop', 'dev', 'staging', 'production'];
+  const isProtected = (b: BranchInfo) => b.isCurrentBranch || protectedNames.includes(b.name);
+
+  const protectedBranches = branches.filter(isProtected);
+  const nonProtected = branches.filter(b => !isProtected(b));
+
+  const mergedBranches = nonProtected.filter(b => b.isMerged);
+  const staleBranches = nonProtected.filter(b => !b.isMerged && b.daysOld > daysUntilStale && !b.remoteGone);
+  const goneBranches = nonProtected.filter(b => b.remoteGone && !b.isMerged);
+  const activeBranches = nonProtected.filter(b => !b.isMerged && b.daysOld <= daysUntilStale && !b.remoteGone);
 
   const avgHealth = branches.length > 0
     ? Math.round(branches.reduce((sum, b) => sum + (b.healthScore || 100), 0) / branches.length)
     : 100;
 
-  const allBranches = [...mergedBranches, ...staleBranches, ...goneBranches, ...activeBranches];
-
-  function renderBranchRow(branch: BranchInfo): string {
+  function renderBranchRow(branch: BranchInfo, mode: 'delete' | 'switch'): string {
     const healthStatus = branch.healthStatus || 'healthy';
     const note = branchNotes[branch.name];
-    const noteHtml = note ? `<div class="branch-note" title="${escapeHtml(note.note)}">📝 ${escapeHtml(note.note)}</div>` : '';
+    const noteHtml = note
+      ? `<div class="row-note" title="${escapeHtml(note.note)}">📝 ${escapeHtml(note.note)}</div>`
+      : '';
 
-    const prInfo =
-      branch.prStatus
-        ? `<a href="${escapeHtml(branch.prStatus.url)}" class="pr-link" title="${escapeHtml(branch.prStatus.title)}">#${branch.prStatus.number} (${escapeHtml(branch.prStatus.state)})</a>`
-        : '';
+    const prBadge = branch.prStatus
+      ? `<span class="pr-badge" data-action="openUrl" data-url="${escapeHtml(branch.prStatus.url)}" title="${escapeHtml(branch.prStatus.title)}">pr-${branch.prStatus.number}</span>`
+      : '';
 
-    const remoteInfo = branch.hasRemote ? (branch.remoteGone ? '<span class="remote-gone">🔴 Gone</span>' : '🌐') : '';
+    const abBadge = (branch.ahead !== undefined && branch.behind !== undefined)
+      ? `<span class="ab-badge" title="Ahead: ${branch.ahead}, Behind: ${branch.behind}">+${branch.ahead}-${branch.behind}</span>`
+      : '';
 
-    const aheadBehindInfo =
-      branch.ahead !== undefined && branch.behind !== undefined
-        ? `<span class="ahead-behind" title="Ahead: ${branch.ahead}, Behind: ${branch.behind}">↑${branch.ahead} ↓${branch.behind}</span>`
-        : '';
+    const checkbox = mode === 'delete'
+      ? `<input type="checkbox" class="branch-checkbox" data-branch="${escapeHtml(branch.name)}"/>`
+      : '';
 
-    return `
-      <tr data-branch="${escapeHtml(branch.name)}" class="${branch.isCurrentBranch ? 'current-branch' : ''}">
-        <td><input type="checkbox" class="branch-checkbox" data-branch="${escapeHtml(branch.name)}" ${branch.isCurrentBranch ? 'disabled' : ''}/></td>
-        <td>
-          <div class="branch-name">${escapeHtml(branch.name)}</div>
-          ${noteHtml}
-        </td>
-        <td><span class="health-indicator health-${healthStatus}" title="${escapeHtml(branch.healthReason || '')}"></span></td>
-        <td>${formatAge(branch.daysOld)}</td>
-        <td>${branch.isMerged ? '✓' : ''}</td>
-        <td>${escapeHtml(branch.author || '')}</td>
-        <td>${remoteInfo} ${prInfo} ${aheadBehindInfo}</td>
-        <td>
-          <button class="action-btn" data-action="deleteBranch" data-branch="${escapeHtml(branch.name)}" ${branch.isCurrentBranch ? 'disabled' : ''}>Delete</button>
-          <button class="action-btn" data-action="switchTo" data-branch="${escapeHtml(branch.name)}" ${branch.isCurrentBranch ? 'disabled' : ''}>Switch</button>
-          <button class="action-btn" data-action="addNote" data-branch="${escapeHtml(branch.name)}">Note</button>
-        </td>
-      </tr>
-    `;
+    const actionBtn = mode === 'delete'
+      ? `<button class="row-action-btn row-delete" data-action="deleteBranch" data-branch="${escapeHtml(branch.name)}">Delete</button>`
+      : `<button class="row-action-btn row-switch" data-action="switchTo" data-branch="${escapeHtml(branch.name)}">Switch</button>`;
+
+    return `<div class="branch-row" data-branch="${escapeHtml(branch.name)}">
+    ${checkbox}
+    <span class="health-dot health-${healthStatus}" title="${escapeHtml(branch.healthReason || '')}"></span>
+    <div class="row-info" data-action="addNote" data-branch="${escapeHtml(branch.name)}">
+      <span class="row-name">${escapeHtml(branch.name)}</span>
+      ${prBadge}
+      ${noteHtml}
+    </div>
+    <span class="row-spacer"></span>
+    <span class="row-age">${formatAge(branch.daysOld)}</span>
+    ${abBadge}
+    ${actionBtn}
+  </div>`;
+  }
+
+  function renderBranchGroup(title: string, groupBranches: BranchInfo[], mode: 'delete' | 'switch', groupId: string): string {
+    if (groupBranches.length === 0) return '';
+    const groupCheckbox = mode === 'delete'
+      ? `<input type="checkbox" class="group-checkbox" data-action="toggleGroup" data-group="${groupId}"/>`
+      : '';
+    const deleteBtn = mode === 'delete'
+      ? `<button class="btn-group-action" data-action="deleteGroupSelected" data-group="${groupId}">Delete Selected</button>`
+      : '';
+    return `<div class="branch-group" data-group="${groupId}">
+    <div class="group-header">
+      ${groupCheckbox}
+      <span class="group-title">${title} (${groupBranches.length})</span>
+      <span class="group-spacer"></span>
+      ${deleteBtn}
+    </div>
+    ${groupBranches.map(b => renderBranchRow(b, mode)).join('')}
+  </div>`;
   }
 
   function renderRemoteBranchRow(branch: RemoteBranchInfo): string {
@@ -1113,7 +1140,6 @@ function getWebviewContent(
     return `${days}d ago`;
   }
 
-  const branchRows = allBranches.map(renderBranchRow).join('');
   const remoteBranchRows = remoteBranches.map(renderRemoteBranchRow).join('');
   const worktreeRows = worktrees.map(renderWorktreeRow).join('');
   const stashRows = stashes.map(renderStashRow).join('');
@@ -1161,31 +1187,6 @@ function getWebviewContent(
     .header-actions {
       display: flex;
       gap: 8px;
-    }
-
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-
-    .stat-card {
-      padding: 16px;
-      background: var(--vscode-editor-inactiveSelectionBackground);
-      border-radius: 4px;
-      border: 1px solid var(--vscode-panel-border);
-    }
-
-    .stat-value {
-      font-size: 24px;
-      font-weight: 600;
-      margin-bottom: 4px;
-    }
-
-    .stat-label {
-      font-size: 12px;
-      opacity: 0.8;
     }
 
     .tabs {
@@ -1316,6 +1317,52 @@ function getWebviewContent(
     .health-warning { background-color: var(--vscode-editorWarning-foreground, #cca700); }
     .health-critical { background-color: var(--vscode-editorError-foreground, #f14c4c); }
     .health-danger { background-color: var(--vscode-inputValidation-errorBorder, #be1100); }
+
+    /* Search */
+    .search-bar { margin-bottom: 12px; }
+    .search-input { width: 100%; padding: 6px 10px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; font-size: 13px; }
+
+    /* Filter pills + sort */
+    .filter-bar { display: flex; align-items: center; margin-bottom: 12px; gap: 8px; }
+    .filter-pills { display: flex; gap: 6px; flex: 1; }
+    .pill { padding: 4px 12px; border-radius: 12px; border: 1px solid var(--vscode-panel-border); background: transparent; color: var(--vscode-foreground); font-size: 12px; cursor: pointer; opacity: 0.5; }
+    .pill.pill-on { opacity: 1; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+
+    /* Branch groups */
+    .branch-group { margin-bottom: 8px; }
+    .group-header { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+    .group-title { font-weight: 600; font-size: 13px; }
+    .group-spacer { flex: 1; }
+    .btn-group-action { padding: 3px 10px; background: var(--vscode-errorForeground); color: #fff; border: none; border-radius: 3px; font-size: 11px; cursor: pointer; opacity: 0.8; }
+    .btn-group-action:hover { opacity: 1; }
+
+    /* Branch rows */
+    .branch-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
+    .branch-row:hover { background: var(--vscode-list-hoverBackground); }
+    .health-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .row-info { display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; }
+    .row-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row-note { font-size: 11px; color: var(--vscode-descriptionForeground); font-style: italic; }
+    .row-spacer { flex: 1; }
+    .row-age { font-size: 12px; opacity: 0.7; white-space: nowrap; }
+
+    /* Ahead/behind badge */
+    .ab-badge { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); white-space: nowrap; font-family: monospace; }
+
+    /* PR badge */
+    .pr-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--vscode-panel-border); cursor: pointer; white-space: nowrap; }
+
+    /* Row action buttons */
+    .row-action-btn { padding: 3px 12px; border: none; border-radius: 3px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+    .row-delete { background: var(--vscode-errorForeground); color: #fff; }
+    .row-switch { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+    .row-action-btn:hover { opacity: 0.85; }
+
+    /* Protected */
+    .protected-section { margin-top: 12px; font-size: 12px; opacity: 0.6; }
+    .protected-section summary { cursor: pointer; }
+
+    .sort-control select { background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 2px; padding: 4px 8px; font-size: 12px; }
 
     .flex-1 { flex: 1; }
     .compare-label { width: 80px; font-size: 12px; }
@@ -1490,43 +1537,44 @@ function getWebviewContent(
 </head>
 <body>
   <div class="header">
-    <h1>🌿 Git Branch Manager</h1>
+    <h1>Branch Manager</h1>
     <div class="header-actions">
-      <button class="btn" data-action="refresh">↻ Refresh</button>
-      <button class="btn btn-secondary" data-action="connectGitHub">Connect GitHub</button>
-    </div>
-  </div>
-
-  <div class="stats">
-    <div class="stat-card">
-      <div class="stat-value">${branches.length}</div>
-      <div class="stat-label">Total Branches</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">${mergedBranches.length}</div>
-      <div class="stat-label">Merged</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">${staleBranches.length}</div>
-      <div class="stat-label">Stale (&gt;${daysUntilStale}d)</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value">${goneBranches.length}</div>
-      <div class="stat-label">Remote Gone</div>
+      <button class="btn" data-action="createBranch">New Branch</button>
+      <button class="btn btn-secondary" data-action="refresh">Refresh</button>
     </div>
   </div>
 
   <div class="tabs">
-    <button class="tab active" data-action="showTab" data-tab="branches">Branches</button>
-    <button class="tab" data-action="showTab" data-tab="remotes">Remote Branches</button>
-    <button class="tab" data-action="showTab" data-tab="worktrees">Worktrees</button>
-    <button class="tab" data-action="showTab" data-tab="stashes">Stashes</button>
+    <button class="tab active" data-action="showTab" data-tab="branches">Local</button>
+    <button class="tab" data-action="showTab" data-tab="remotes">Remote</button>
+    <button class="tab" data-action="showTab" data-tab="worktrees">Worktrees (${worktrees.length})</button>
+    <button class="tab" data-action="showTab" data-tab="stashes">Stashes (${stashes.length})</button>
     <button class="tab" data-action="showTab" data-tab="recovery">Recovery${recoveryLog.length > 0 ? ` (${recoveryLog.length})` : ''}</button>
     <button class="tab" data-action="showTab" data-tab="tools">Tools</button>
     <button class="tab" data-action="showTab" data-tab="compare">Compare</button>
   </div>
 
   <div id="branches-tab" class="tab-content active">
+    <div class="search-bar">
+      <input type="text" id="branch-search" placeholder="Search branches..." class="search-input">
+    </div>
+
+    <div class="filter-bar">
+      <div class="filter-pills">
+        <button class="pill pill-on" data-action="toggleFilter" data-filter="merged">Merged (${mergedBranches.length})</button>
+        <button class="pill pill-on" data-action="toggleFilter" data-filter="stale">Stale (${staleBranches.length})</button>
+        <button class="pill pill-on" data-action="toggleFilter" data-filter="orphaned">Orphaned (${goneBranches.length})</button>
+        <button class="pill pill-on" data-action="toggleFilter" data-filter="active">Active (${activeBranches.length})</button>
+      </div>
+      <div class="sort-control">
+        <select id="sort-select" data-action="sortBranches">
+          <option value="health">Health</option>
+          <option value="name">Name</option>
+          <option value="age">Age</option>
+        </select>
+      </div>
+    </div>
+
     <div class="health-bar">
       <div>
         <div class="health-score health-score-${avgHealth >= 70 ? 'healthy' : avgHealth >= 40 ? 'warning' : 'critical'}">${avgHealth}</div>
@@ -1541,37 +1589,16 @@ function getWebviewContent(
       </div>
     </div>
 
-    <div class="toolbar">
-      <button class="btn" data-action="deleteSelected">Delete Selected</button>
-      <button class="btn btn-secondary" data-action="selectMerged">Select Merged</button>
-      <button class="btn btn-secondary" data-action="selectStale">Select Stale</button>
-      <button class="btn btn-secondary" data-action="selectGone">Select Gone</button>
-      <button class="btn btn-secondary" data-action="clearSelection">Clear</button>
+    <div id="branch-groups">
+      ${renderBranchGroup('Merged', mergedBranches, 'delete', 'merged')}
+      ${renderBranchGroup('Stale', staleBranches, 'delete', 'stale')}
+      ${renderBranchGroup('Orphaned', goneBranches, 'delete', 'orphaned')}
+      ${renderBranchGroup('Active', activeBranches, 'switch', 'active')}
     </div>
 
-    ${
-      branches.length === 0
-        ? '<div class="empty-state">No branches found</div>'
-        : `
-    <table>
-      <thead>
-        <tr>
-          <th><input type="checkbox" id="select-all" data-action="toggleSelectAll"/></th>
-          <th>Branch</th>
-          <th>Health</th>
-          <th>Age</th>
-          <th>Merged</th>
-          <th>Author</th>
-          <th>Info</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${branchRows}
-      </tbody>
-    </table>
-    `
-    }
+    ${protectedBranches.length > 0 ? `<details class="protected-section">
+      <summary>Protected: ${protectedBranches.map(b => escapeHtml(b.name)).join(', ')}</summary>
+    </details>` : ''}
   </div>
 
   <div id="remotes-tab" class="tab-content">
@@ -1825,56 +1852,64 @@ function getWebviewContent(
       vscode.postMessage({ command: 'promptBranchNote', branch });
     }
 
-    function deleteSelected() {
-      const selected = Array.from(document.querySelectorAll('.branch-checkbox:checked')).map(cb => cb.dataset.branch);
-      if (selected.length > 0) {
-        vscode.postMessage({ command: 'deleteMultiple', branches: selected });
-      }
-    }
-
-    function toggleSelectAll(checked) {
-      document.querySelectorAll('.branch-checkbox').forEach(cb => cb.checked = checked);
-    }
-
-    function selectMerged() {
-      const rows = document.querySelectorAll('tr[data-branch]');
-      rows.forEach(row => {
-        const mergedCell = row.cells[4];
-        if (mergedCell && mergedCell.textContent.includes('✓')) {
-          const checkbox = row.querySelector('.branch-checkbox');
-          if (checkbox && !checkbox.disabled) checkbox.checked = true;
-        }
+    // Search — filter rows by name
+    function searchBranches(query) {
+      var q = query.toLowerCase();
+      document.querySelectorAll('.branch-row').forEach(function(row) {
+        var name = row.dataset.branch || '';
+        row.style.display = name.toLowerCase().includes(q) ? '' : 'none';
       });
     }
 
-    function selectStale() {
-      const rows = document.querySelectorAll('tr[data-branch]');
-      rows.forEach(row => {
-        const ageCell = row.cells[3];
-        if (ageCell) {
-          const match = ageCell.textContent.match(/(\\d+)d/);
-          if (match && parseInt(match[1]) > ${daysUntilStale}) {
-            const checkbox = row.querySelector('.branch-checkbox');
-            if (checkbox && !checkbox.disabled) checkbox.checked = true;
+    // Filter pills — toggle group visibility
+    function toggleFilter(el) {
+      el.classList.toggle('pill-on');
+      var group = el.dataset.filter;
+      var groupEl = document.querySelector('.branch-group[data-group="' + group + '"]');
+      if (groupEl) groupEl.style.display = el.classList.contains('pill-on') ? '' : 'none';
+    }
+
+    // Sort branches (re-order rows within each group)
+    function sortBranches() {
+      var sortBy = document.getElementById('sort-select').value;
+      document.querySelectorAll('.branch-group').forEach(function(group) {
+        var header = group.querySelector('.group-header');
+        var rows = Array.from(group.querySelectorAll('.branch-row'));
+        rows.sort(function(a, b) {
+          if (sortBy === 'name') {
+            return (a.dataset.branch || '').localeCompare(b.dataset.branch || '');
+          } else if (sortBy === 'age') {
+            var ageA = a.querySelector('.row-age');
+            var ageB = b.querySelector('.row-age');
+            var dA = parseInt((ageA ? ageA.textContent : '0').replace(/[^0-9]/g, '')) || 0;
+            var dB = parseInt((ageB ? ageB.textContent : '0').replace(/[^0-9]/g, '')) || 0;
+            return dB - dA;
           }
-        }
+          // default: health — sort by health dot class
+          var hA = a.querySelector('.health-dot');
+          var hB = b.querySelector('.health-dot');
+          var order = { 'health-danger': 0, 'health-critical': 1, 'health-warning': 2, 'health-healthy': 3 };
+          var scoreA = 3, scoreB = 3;
+          if (hA) { for (var k in order) { if (hA.classList.contains(k)) { scoreA = order[k]; break; } } }
+          if (hB) { for (var k in order) { if (hB.classList.contains(k)) { scoreB = order[k]; break; } } }
+          return scoreA - scoreB;
+        });
+        rows.forEach(function(r) { group.appendChild(r); });
       });
     }
 
-    function selectGone() {
-      const rows = document.querySelectorAll('tr[data-branch]');
-      rows.forEach(row => {
-        const infoCell = row.cells[6];
-        if (infoCell && infoCell.textContent.includes('Gone')) {
-          const checkbox = row.querySelector('.branch-checkbox');
-          if (checkbox && !checkbox.disabled) checkbox.checked = true;
-        }
-      });
+    // Group checkbox — toggle all checkboxes in a group
+    function toggleGroup(groupId, checked) {
+      var group = document.querySelector('.branch-group[data-group="' + groupId + '"]');
+      if (group) group.querySelectorAll('.branch-checkbox').forEach(function(cb) { cb.checked = checked; });
     }
 
-    function clearSelection() {
-      document.querySelectorAll('.branch-checkbox').forEach(cb => cb.checked = false);
-      document.getElementById('select-all').checked = false;
+    // Delete selected within a group
+    function deleteGroupSelected(groupId) {
+      var group = document.querySelector('.branch-group[data-group="' + groupId + '"]');
+      if (!group) return;
+      var selected = Array.from(group.querySelectorAll('.branch-checkbox:checked')).map(function(cb) { return cb.dataset.branch; });
+      if (selected.length > 0) vscode.postMessage({ command: 'deleteMultiple', branches: selected });
     }
 
     // Remote branch actions
@@ -1982,12 +2017,12 @@ function getWebviewContent(
 
       try {
         const regex = new RegExp(pattern);
-        const rows = document.querySelectorAll('tr[data-branch]');
+        const rows = document.querySelectorAll('.branch-row');
         rows.forEach(row => {
           const branch = row.dataset.branch;
           if (regex.test(branch)) {
             const checkbox = row.querySelector('.branch-checkbox');
-            if (checkbox && !checkbox.disabled) checkbox.checked = true;
+            if (checkbox) checkbox.checked = true;
           }
         });
       } catch (e) {
@@ -2358,21 +2393,17 @@ function getWebviewContent(
           for (var branchName in prData) {
             if (!prData.hasOwnProperty(branchName)) continue;
             var pr = prData[branchName];
-            var row = document.querySelector('tr[data-branch="' + CSS.escape(branchName) + '"]');
+            var row = document.querySelector('.branch-row[data-branch="' + CSS.escape(branchName) + '"]');
             if (row) {
-              var cells = row.querySelectorAll('td');
-              if (cells.length >= 7) {
-                var infoCell = cells[6];
-                var prLink = document.createElement('a');
-                prLink.className = 'pr-link';
-                prLink.href = '#';
-                prLink.title = pr.title;
-                prLink.textContent = '#' + pr.number + ' (' + pr.state + ')';
-                prLink.addEventListener('click', (function(url) {
-                  return function(e) { e.preventDefault(); vscode.postMessage({ command: 'openUrl', url: url }); };
-                })(pr.url));
-                infoCell.prepend(document.createTextNode(' '));
-                infoCell.prepend(prLink);
+              var rowInfo = row.querySelector('.row-info');
+              if (rowInfo && !rowInfo.querySelector('.pr-badge')) {
+                var badge = document.createElement('span');
+                badge.className = 'pr-badge';
+                badge.title = pr.title;
+                badge.textContent = 'pr-' + pr.number;
+                badge.dataset.action = 'openUrl';
+                badge.dataset.url = pr.url;
+                rowInfo.appendChild(badge);
               }
             }
           }
@@ -2399,10 +2430,6 @@ function getWebviewContent(
       vscode.postMessage({ command: 'refresh' });
     }
 
-    function connectGitHub() {
-      vscode.postMessage({ command: 'connectGitHub' });
-    }
-
     // Event delegation — replaces all inline onclick/onchange handlers for CSP compliance
     document.addEventListener('click', function(e) {
       var el = e.target.closest('[data-action]');
@@ -2420,12 +2447,10 @@ function getWebviewContent(
         case 'dismissRecoveryEntry': dismissRecoveryEntry(el.dataset.branch, el.dataset.hash); break;
         case 'showTab': showTab(el.dataset.tab, el); break;
         case 'refresh': refresh(); break;
-        case 'connectGitHub': connectGitHub(); break;
-        case 'deleteSelected': deleteSelected(); break;
-        case 'selectMerged': selectMerged(); break;
-        case 'selectStale': selectStale(); break;
-        case 'selectGone': selectGone(); break;
-        case 'clearSelection': clearSelection(); break;
+        case 'createBranch': vscode.postMessage({ command: 'createBranch' }); break;
+        case 'toggleFilter': toggleFilter(el); break;
+        case 'deleteGroupSelected': deleteGroupSelected(el.dataset.group); break;
+        case 'openUrl': if (el.dataset.url) vscode.postMessage({ command: 'openUrl', url: el.dataset.url }); break;
         case 'deleteSelectedRemotes': deleteSelectedRemotes(); break;
         case 'selectMergedRemotes': selectMergedRemotes(); break;
         case 'selectGoneRemotes': selectGoneRemotes(); break;
@@ -2449,14 +2474,19 @@ function getWebviewContent(
           break;
       }
     });
-    // Handle checkbox change events via delegation
+    // Handle checkbox/select change events via delegation
     document.addEventListener('change', function(e) {
       var el = e.target.closest('[data-action]');
       if (!el) return;
       var action = el.dataset.action;
-      if (action === 'toggleSelectAll') toggleSelectAll(el.checked);
+      if (action === 'toggleGroup') toggleGroup(el.dataset.group, el.checked);
       if (action === 'toggleSelectAllRemotes') toggleSelectAllRemotes(el.checked);
+      if (action === 'sortBranches') sortBranches();
     });
+
+    // Search input listener
+    var searchInput = document.getElementById('branch-search');
+    if (searchInput) searchInput.addEventListener('input', function(e) { searchBranches(e.target.value); });
 
     // Load cleanup rules
     const cleanupRules = ${rulesJson};
