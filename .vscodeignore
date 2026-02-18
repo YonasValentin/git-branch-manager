@@ -17,3 +17,5 @@ esbuild.js
 .github/**
 CHANGELOG.md
 .vscodeignore
+.claude/**
+.planning/**

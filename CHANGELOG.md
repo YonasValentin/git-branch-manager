@@ -2,6 +2,28 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [2.0.0] - 2026-02-18
+
+### Added
+- **Sidebar Tree View**: Native VS Code tree view in Source Control sidebar with branches grouped by status (Merged, Stale, Orphaned, Active), health score badges, PR status icons, and lazy loading for 1000+ branches
+- **Multi-Repository Support**: Automatic detection of all git repositories in workspace folders including nested monorepos, repository picker UI, aggregate status bar across all repos, and per-repo storage namespacing
+- **Gone Branch Auto-Detection**: Watches `.git/FETCH_HEAD` for post-fetch/pull events, prompts cleanup of orphaned local branches, one-click clean all gone branches, configurable behavior (prompt, auto-delete, notify only)
+- **Event-Driven Auto-Cleanup**: Triggers cleanup evaluation on git fetch, pull, and merge events with compound rules (merged AND stale AND pattern match), dry-run preview, glob exclusion patterns, and team-safe mode (only suggest branches you authored)
+- **Cleanup Rules UI**: Visual rule builder form in webview (no JSON editing), conditions for merged/age/pattern/no-remote, enable/disable individual rules, dry-run preview showing affected branches, and JSON import/export for team sharing
+- **Branch Comparison & Timeline**: Select two branches to compare unique commits and changed files, click files to open VS Code diff editor, branch activity timeline showing last 5 commits on hover in tree view, timeline available in both webview and tree view tooltip
+- **Platform Integration**: Auto-detects GitHub, GitLab, or Azure DevOps from remote URL (no config needed), fetches and displays PR/MR status per branch for all platforms, click branch to open associated PR/MR in browser, PAT management via VS Code secret storage
+- **Undo & Recovery System**: Recovery tab showing deleted branches with name, date, and commit hash, one-click restore any branch from recovery log, recovery log persists across VS Code sessions
+
+### Security
+- Migrated all git operations from `exec` to `execFile` — eliminates all shell injection vectors
+- Added ReDoS-safe regex validation with timeout protection for user-provided patterns
+- Added `frame-ancestors 'none'` to webview CSP preventing clickjacking attacks
+- All webview DOM operations use `createElement`/`textContent` instead of `innerHTML` preventing XSS
+
+### Changed
+- Version bump from 1.7.2 to 2.0.0 reflecting major feature additions
+- Excluded `.claude/` and `.planning/` directories from VSIX package
+
 ## [1.7.1] - 2025-12-10
 
 ### Added
