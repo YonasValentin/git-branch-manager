@@ -54,9 +54,21 @@ export async function getBaseBranch(cwd: string): Promise<string> {
     const stdout = await gitCommand(['symbolic-ref', 'refs/remotes/origin/HEAD'], cwd);
     return stdout.replace('refs/remotes/origin/', '');
   } catch {
-    const stdout = await gitCommand(['branch', '-r'], cwd);
-    if (stdout.includes('origin/main')) return 'main';
-    if (stdout.includes('origin/master')) return 'master';
+    try {
+      const stdout = await gitCommand(['branch', '-r'], cwd);
+      if (stdout.includes('origin/main')) return 'main';
+      if (stdout.includes('origin/master')) return 'master';
+    } catch {
+      // No remote branches available
+    }
+    // Fallback: check local branches
+    try {
+      const local = await gitCommand(['branch', '--format=%(refname:short)'], cwd);
+      if (local.includes('main')) return 'main';
+      if (local.includes('master')) return 'master';
+    } catch {
+      // No local branches available
+    }
     return 'main';
   }
 }

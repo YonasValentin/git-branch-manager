@@ -101,16 +101,20 @@ export async function detectPlatform(cwd: string): Promise<PlatformInfo> {
     }
 
     // 6. GitLab HTTPS fallback — https://gitlab.com/namespace/repo (or self-hosted)
+    //    Excludes github.com and Azure hosts already matched above.
     const gitlabHttpsMatch = url.match(/https?:\/\/([^/]+)\/([^/]+)\/([^/.]+)/);
     if (gitlabHttpsMatch) {
       const gitlabHost = gitlabHttpsMatch[1];
-      const ns = gitlabHttpsMatch[2];
-      const proj = gitlabHttpsMatch[3].replace(/\.git$/, '');
-      return {
-        platform: 'gitlab',
-        gitlabHost,
-        projectPath: `${ns}/${proj}`,
-      };
+      // Skip hosts already handled by GitHub/Azure matchers
+      if (!gitlabHost.includes('github.com') && !gitlabHost.includes('dev.azure.com') && !gitlabHost.includes('visualstudio.com')) {
+        const ns = gitlabHttpsMatch[2];
+        const proj = gitlabHttpsMatch[3].replace(/\.git$/, '');
+        return {
+          platform: 'gitlab',
+          gitlabHost,
+          projectPath: `${ns}/${proj}`,
+        };
+      }
     }
   } catch {}
 

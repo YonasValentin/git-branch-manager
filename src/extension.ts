@@ -15,9 +15,6 @@ import {
 // Services
 import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem, GoneDetector, AutoCleanupEvaluator, DiffContentProvider, GIT_DIFF_SCHEME } from './services';
 
-// Constants
-import { BRANCH_TEMPLATES } from './constants';
-
 // Utilities
 import { getNonce, formatAge, escapeHtml, getHealthColor, validateRegexPattern } from './utils';
 
@@ -39,14 +36,10 @@ import {
   getAllBranchNames,
   renameBranch,
   deleteBranchForce,
-  getGitHubInfo,
   fetchGitHubPRs,
   detectPlatform,
   fetchGitLabMRs,
   fetchAzurePRs,
-  calculateHealthScore,
-  getHealthStatus,
-  getHealthReason,
 } from './git';
 
 // Storage
@@ -70,14 +63,11 @@ import {
   cleanRemoteBranches,
   quickCleanup,
   switchBranch,
-  deleteBranch,
-  deleteMultipleBranches,
   checkBranchHealth,
   undoLastDelete,
   restoreFromLog,
 } from './commands';
 
-let globalStatusBarItem: vscode.StatusBarItem | undefined;
 let gitHubSession: vscode.AuthenticationSession | undefined;
 
 /**
@@ -103,7 +93,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = 'git-branch-manager.cleanup';
-  globalStatusBarItem = statusBarItem;
   context.subscriptions.push(statusBarItem);
 
   /**
@@ -113,7 +102,7 @@ export async function activate(context: vscode.ExtensionContext) {
     await updateStatusBar(statusBarItem, repoContext);
   }
 
-  updateGlobalStatusBar();
+  void updateGlobalStatusBar();
 
   // Tree view (TREE-04, TREE-05)
   const branchTreeProvider = new BranchTreeProvider(repoContext);
@@ -220,7 +209,7 @@ export async function activate(context: vscode.ExtensionContext) {
         await deleteBranchForce(item.repoPath, item.branch.name);
         vscode.window.showInformationMessage(`Deleted branch: ${item.branch.name}`);
         branchTreeProvider.scheduleRefresh();
-        updateGlobalStatusBar();
+        void updateGlobalStatusBar();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`Failed to delete branch: ${msg}`);
@@ -233,7 +222,7 @@ export async function activate(context: vscode.ExtensionContext) {
       try {
         await switchBranch(item.repoPath, item.branch.name);
         branchTreeProvider.scheduleRefresh();
-        updateGlobalStatusBar();
+        void updateGlobalStatusBar();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`Failed to switch branch: ${msg}`);
@@ -361,7 +350,7 @@ export async function activate(context: vscode.ExtensionContext) {
   });
   context.subscriptions.push(undoDeleteCommand);
 
-  const statusBarInterval = setInterval(() => updateGlobalStatusBar(), 30000);
+  const statusBarInterval = setInterval(() => { updateGlobalStatusBar().catch(() => {}); }, 30000);
   const healthCheckTimeout = setTimeout(() => checkBranchHealth(repoContext), 5000);
 
   context.subscriptions.push({
@@ -443,6 +432,9 @@ async function showBranchManager(
     enableScripts: true,
     retainContextWhenHidden: true,
   });
+
+  // Clean up when the panel is disposed (closed by user)
+  panel.onDidDispose(() => {}, undefined, context.subscriptions);
 
   async function updateWebview() {
     const repo = await repoContext.getActiveRepository();
@@ -986,9 +978,9 @@ function getWebviewContent(
         <td>${branch.author || ''}</td>
         <td>${remoteInfo} ${prInfo} ${aheadBehindInfo}</td>
         <td>
-          <button class="action-btn" onclick="deleteBranch('${escapeHtml(branch.name)}')" ${branch.isCurrentBranch ? 'disabled' : ''}>Delete</button>
-          <button class="action-btn" onclick="switchTo('${escapeHtml(branch.name)}')" ${branch.isCurrentBranch ? 'disabled' : ''}>Switch</button>
-          <button class="action-btn" onclick="addNote('${escapeHtml(branch.name)}')">Note</button>
+          <button class="action-btn" data-action="deleteBranch" data-branch="${escapeHtml(branch.name)}" ${branch.isCurrentBranch ? 'disabled' : ''}>Delete</button>
+          <button class="action-btn" data-action="switchTo" data-branch="${escapeHtml(branch.name)}" ${branch.isCurrentBranch ? 'disabled' : ''}>Switch</button>
+          <button class="action-btn" data-action="addNote" data-branch="${escapeHtml(branch.name)}">Note</button>
         </td>
       </tr>
     `;
@@ -1004,7 +996,7 @@ function getWebviewContent(
         <td>${branch.isGone ? '🔴 Gone' : ''}</td>
         <td>${branch.localBranch || ''}</td>
         <td>
-          <button class="action-btn" onclick="deleteRemoteBranch('${escapeHtml(branch.remote)}', '${escapeHtml(branch.name)}')">Delete</button>
+          <button class="action-btn" data-action="deleteRemoteBranch" data-remote="${escapeHtml(branch.remote)}" data-branch="${escapeHtml(branch.name)}">Delete</button>
         </td>
       </tr>
     `;
@@ -1037,9 +1029,9 @@ function getWebviewContent(
         <td>${formatAge(stash.daysOld)}</td>
         <td>${stash.filesChanged || 0}</td>
         <td>
-          <button class="action-btn" onclick="applyStash(${stash.index})">Apply</button>
-          <button class="action-btn" onclick="popStash(${stash.index})">Pop</button>
-          <button class="action-btn" onclick="dropStash(${stash.index})">Drop</button>
+          <button class="action-btn" data-action="applyStash" data-index="${stash.index}">Apply</button>
+          <button class="action-btn" data-action="popStash" data-index="${stash.index}">Pop</button>
+          <button class="action-btn" data-action="dropStash" data-index="${stash.index}">Drop</button>
         </td>
       </tr>
     `;
@@ -1055,8 +1047,8 @@ function getWebviewContent(
         <td>${timeAgo}</td>
         <td><code>${entry.commitHash.substring(0, 7)}</code></td>
         <td>
-          <button class="action-btn" onclick="restoreBranch('${escapeHtml(entry.branchName)}', '${entry.commitHash}')">Restore</button>
-          <button class="action-btn" onclick="dismissRecoveryEntry('${escapeHtml(entry.branchName)}', '${entry.commitHash}')">Dismiss</button>
+          <button class="action-btn" data-action="restoreBranch" data-branch="${escapeHtml(entry.branchName)}" data-hash="${entry.commitHash}">Restore</button>
+          <button class="action-btn" data-action="dismissRecoveryEntry" data-branch="${escapeHtml(entry.branchName)}" data-hash="${entry.commitHash}">Dismiss</button>
         </td>
       </tr>
     `;
@@ -1420,8 +1412,8 @@ function getWebviewContent(
   <div class="header">
     <h1>🌿 Git Branch Manager</h1>
     <div class="header-actions">
-      <button class="btn" onclick="refresh()">↻ Refresh</button>
-      <button class="btn btn-secondary" onclick="connectGitHub()">Connect GitHub</button>
+      <button class="btn" data-action="refresh">↻ Refresh</button>
+      <button class="btn btn-secondary" data-action="connectGitHub">Connect GitHub</button>
     </div>
   </div>
 
@@ -1445,22 +1437,22 @@ function getWebviewContent(
   </div>
 
   <div class="tabs">
-    <button class="tab active" onclick="showTab('branches')">Branches</button>
-    <button class="tab" onclick="showTab('remotes')">Remote Branches</button>
-    <button class="tab" onclick="showTab('worktrees')">Worktrees</button>
-    <button class="tab" onclick="showTab('stashes')">Stashes</button>
-    <button class="tab" onclick="showTab('recovery')">Recovery${recoveryLog.length > 0 ? ` (${recoveryLog.length})` : ''}</button>
-    <button class="tab" onclick="showTab('tools')">Tools</button>
-    <button class="tab" onclick="showTab('compare')">Compare</button>
+    <button class="tab active" data-action="showTab" data-tab="branches">Branches</button>
+    <button class="tab" data-action="showTab" data-tab="remotes">Remote Branches</button>
+    <button class="tab" data-action="showTab" data-tab="worktrees">Worktrees</button>
+    <button class="tab" data-action="showTab" data-tab="stashes">Stashes</button>
+    <button class="tab" data-action="showTab" data-tab="recovery">Recovery${recoveryLog.length > 0 ? ` (${recoveryLog.length})` : ''}</button>
+    <button class="tab" data-action="showTab" data-tab="tools">Tools</button>
+    <button class="tab" data-action="showTab" data-tab="compare">Compare</button>
   </div>
 
   <div id="branches-tab" class="tab-content active">
     <div class="toolbar">
-      <button class="btn" onclick="deleteSelected()">Delete Selected</button>
-      <button class="btn btn-secondary" onclick="selectMerged()">Select Merged</button>
-      <button class="btn btn-secondary" onclick="selectStale()">Select Stale</button>
-      <button class="btn btn-secondary" onclick="selectGone()">Select Gone</button>
-      <button class="btn btn-secondary" onclick="clearSelection()">Clear</button>
+      <button class="btn" data-action="deleteSelected">Delete Selected</button>
+      <button class="btn btn-secondary" data-action="selectMerged">Select Merged</button>
+      <button class="btn btn-secondary" data-action="selectStale">Select Stale</button>
+      <button class="btn btn-secondary" data-action="selectGone">Select Gone</button>
+      <button class="btn btn-secondary" data-action="clearSelection">Clear</button>
     </div>
 
     ${
@@ -1470,7 +1462,7 @@ function getWebviewContent(
     <table>
       <thead>
         <tr>
-          <th><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"/></th>
+          <th><input type="checkbox" id="select-all" data-action="toggleSelectAll"/></th>
           <th>Branch</th>
           <th>Health</th>
           <th>Age</th>
@@ -1490,10 +1482,10 @@ function getWebviewContent(
 
   <div id="remotes-tab" class="tab-content">
     <div class="toolbar">
-      <button class="btn" onclick="deleteSelectedRemotes()">Delete Selected</button>
-      <button class="btn btn-secondary" onclick="selectMergedRemotes()">Select Merged</button>
-      <button class="btn btn-secondary" onclick="selectGoneRemotes()">Select Gone</button>
-      <button class="btn btn-secondary" onclick="clearRemoteSelection()">Clear</button>
+      <button class="btn" data-action="deleteSelectedRemotes">Delete Selected</button>
+      <button class="btn btn-secondary" data-action="selectMergedRemotes">Select Merged</button>
+      <button class="btn btn-secondary" data-action="selectGoneRemotes">Select Gone</button>
+      <button class="btn btn-secondary" data-action="clearRemoteSelection">Clear</button>
     </div>
 
     ${
@@ -1503,7 +1495,7 @@ function getWebviewContent(
     <table>
       <thead>
         <tr>
-          <th><input type="checkbox" id="select-all-remotes" onchange="toggleSelectAllRemotes(this)"/></th>
+          <th><input type="checkbox" id="select-all-remotes" data-action="toggleSelectAllRemotes"/></th>
           <th>Branch</th>
           <th>Age</th>
           <th>Merged</th>
@@ -1522,7 +1514,7 @@ function getWebviewContent(
 
   <div id="worktrees-tab" class="tab-content">
     <div class="toolbar">
-      <button class="btn" onclick="createWorktree()">Create Worktree</button>
+      <button class="btn" data-action="createWorktree">Create Worktree</button>
     </div>
 
     ${
@@ -1549,8 +1541,8 @@ function getWebviewContent(
 
   <div id="stashes-tab" class="tab-content">
     <div class="toolbar">
-      <button class="btn" onclick="createStash()">Create Stash</button>
-      <button class="btn btn-secondary" onclick="clearAllStashes()">Clear All</button>
+      <button class="btn" data-action="createStash">Create Stash</button>
+      <button class="btn btn-secondary" data-action="clearAllStashes">Clear All</button>
     </div>
 
     ${
@@ -1616,7 +1608,7 @@ function getWebviewContent(
         <label style="width: 80px; font-size: 12px;">Branch B:</label>
         <select id="compare-branch-b" style="flex: 1;"></select>
       </div>
-      <button class="btn" onclick="runCompare()">Compare</button>
+      <button class="btn" data-action="runCompare">Compare</button>
     </div>
     <div id="comparison-results"></div>
     <div id="timeline-result" class="comparison-section" style="margin-top: 16px;"></div>
@@ -1629,7 +1621,7 @@ function getWebviewContent(
         <div class="batch-rename-form">
           <input type="text" id="rename-pattern" placeholder="Pattern (regex)" value="feature/">
           <input type="text" id="rename-replacement" placeholder="Replacement" value="feat/">
-          <button class="btn" onclick="batchRename()">Preview Rename</button>
+          <button class="btn" data-action="batchRename">Preview Rename</button>
         </div>
         <p style="font-size: 12px; color: var(--vscode-descriptionForeground);">
           Use regex patterns to rename multiple branches. Example: <code>feature/</code> → <code>feat/</code>
@@ -1640,7 +1632,7 @@ function getWebviewContent(
         <h3>🎯 Regex Branch Selection</h3>
         <div class="filter-row">
           <input type="text" id="regex-pattern" placeholder="Enter regex pattern" style="flex: 1;">
-          <button class="btn" onclick="selectByRegex()">Select Matching</button>
+          <button class="btn" data-action="selectByRegex">Select Matching</button>
         </div>
         <p style="font-size: 12px; color: var(--vscode-descriptionForeground);">
           Select branches matching a regex pattern. Example: <code>^feature/.*</code>
@@ -1651,9 +1643,9 @@ function getWebviewContent(
         <h3>🤖 Auto-Cleanup Rules</h3>
         <div id="rules-container"></div>
         <div style="display:flex;gap:8px;margin-top:12px;">
-          <button class="btn" onclick="addCleanupRule()">Add Rule</button>
-          <button class="btn btn-secondary" onclick="exportRules()">Export to Clipboard</button>
-          <button class="btn btn-secondary" onclick="importRules()">Import from Clipboard</button>
+          <button class="btn" data-action="addCleanupRule">Add Rule</button>
+          <button class="btn btn-secondary" data-action="exportRules">Export to Clipboard</button>
+          <button class="btn btn-secondary" data-action="importRules">Import from Clipboard</button>
         </div>
       </div>
     </div>
@@ -1706,11 +1698,12 @@ function getWebviewContent(
     }
 
     // Tab management
-    function showTab(tabName) {
+    function showTab(tabName, clickedEl) {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      event.target.classList.add('active');
-      document.getElementById(tabName + '-tab').classList.add('active');
+      if (clickedEl) clickedEl.classList.add('active');
+      var tabEl = document.getElementById(tabName + '-tab');
+      if (tabEl) tabEl.classList.add('active');
     }
 
     // Branch actions
@@ -1736,8 +1729,8 @@ function getWebviewContent(
       }
     }
 
-    function toggleSelectAll(checkbox) {
-      document.querySelectorAll('.branch-checkbox').forEach(cb => cb.checked = checkbox.checked);
+    function toggleSelectAll(checked) {
+      document.querySelectorAll('.branch-checkbox').forEach(cb => cb.checked = checked);
     }
 
     function selectMerged() {
@@ -1796,8 +1789,8 @@ function getWebviewContent(
       }
     }
 
-    function toggleSelectAllRemotes(checkbox) {
-      document.querySelectorAll('.remote-branch-checkbox').forEach(cb => cb.checked = checkbox.checked);
+    function toggleSelectAllRemotes(checked) {
+      document.querySelectorAll('.remote-branch-checkbox').forEach(cb => cb.checked = checked);
     }
 
     function selectMergedRemotes() {
@@ -2280,6 +2273,53 @@ function getWebviewContent(
     function connectGitHub() {
       vscode.postMessage({ command: 'connectGitHub' });
     }
+
+    // Event delegation — replaces all inline onclick/onchange handlers for CSP compliance
+    document.addEventListener('click', function(e) {
+      var el = e.target.closest('[data-action]');
+      if (!el || el.disabled) return;
+      var action = el.dataset.action;
+      switch (action) {
+        case 'deleteBranch': deleteBranch(el.dataset.branch); break;
+        case 'switchTo': switchTo(el.dataset.branch); break;
+        case 'addNote': addNote(el.dataset.branch); break;
+        case 'deleteRemoteBranch': deleteRemoteBranch(el.dataset.remote, el.dataset.branch); break;
+        case 'applyStash': applyStash(parseInt(el.dataset.index)); break;
+        case 'popStash': popStash(parseInt(el.dataset.index)); break;
+        case 'dropStash': dropStash(parseInt(el.dataset.index)); break;
+        case 'restoreBranch': restoreBranch(el.dataset.branch, el.dataset.hash); break;
+        case 'dismissRecoveryEntry': dismissRecoveryEntry(el.dataset.branch, el.dataset.hash); break;
+        case 'showTab': showTab(el.dataset.tab, el); break;
+        case 'refresh': refresh(); break;
+        case 'connectGitHub': connectGitHub(); break;
+        case 'deleteSelected': deleteSelected(); break;
+        case 'selectMerged': selectMerged(); break;
+        case 'selectStale': selectStale(); break;
+        case 'selectGone': selectGone(); break;
+        case 'clearSelection': clearSelection(); break;
+        case 'deleteSelectedRemotes': deleteSelectedRemotes(); break;
+        case 'selectMergedRemotes': selectMergedRemotes(); break;
+        case 'selectGoneRemotes': selectGoneRemotes(); break;
+        case 'clearRemoteSelection': clearRemoteSelection(); break;
+        case 'createWorktree': createWorktree(); break;
+        case 'createStash': createStash(); break;
+        case 'clearAllStashes': clearAllStashes(); break;
+        case 'runCompare': runCompare(); break;
+        case 'batchRename': batchRename(); break;
+        case 'selectByRegex': selectByRegex(); break;
+        case 'addCleanupRule': addCleanupRule(); break;
+        case 'exportRules': exportRules(); break;
+        case 'importRules': importRules(); break;
+      }
+    });
+    // Handle checkbox change events via delegation
+    document.addEventListener('change', function(e) {
+      var el = e.target.closest('[data-action]');
+      if (!el) return;
+      var action = el.dataset.action;
+      if (action === 'toggleSelectAll') toggleSelectAll(el.checked);
+      if (action === 'toggleSelectAllRemotes') toggleSelectAllRemotes(el.checked);
+    });
 
     // Load cleanup rules
     const cleanupRules = ${rulesJson};

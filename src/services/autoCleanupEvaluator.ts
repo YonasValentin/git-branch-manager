@@ -96,12 +96,13 @@ export class AutoCleanupEvaluator implements vscode.Disposable {
       try {
         currentUser = await gitCommand(['config', 'user.name'], repoPath);
       } catch {
-        // Skip filter on failure — safe default is to not filter
+        // Fail safe: if we can't determine the user, delete nothing
       }
 
-      if (currentUser) {
-        candidates = candidates.filter(b => b.author === currentUser);
+      if (!currentUser) {
+        return; // Cannot identify user — skip cleanup entirely in team-safe mode
       }
+      candidates = candidates.filter(b => b.author === currentUser);
     }
 
     if (candidates.length === 0) {
@@ -126,9 +127,9 @@ export class AutoCleanupEvaluator implements vscode.Disposable {
       return;
     }
 
-    // Match selected labels back to BranchInfo objects
-    const selectedLabels = new Set(selected.map(s => s.label));
-    const toDelete = candidates.filter(b => selectedLabels.has(`$(git-branch) ${b.name}`));
+    // Match selected items back to BranchInfo objects by branch name
+    const selectedNames = new Set(selected.map(s => s.label.replace(/^\$\(git-branch\) /, '')));
+    const toDelete = candidates.filter(b => selectedNames.has(b.name));
 
     let deleted = 0;
 

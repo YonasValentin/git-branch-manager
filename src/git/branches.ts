@@ -45,11 +45,17 @@ export async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
       for (const line of refOutput.split('\n')) {
         if (!line) continue;
         const parts = line.split('|');
-        if (parts.length >= 3) {
+        if (parts.length >= 4) {
           branchDataMap.set(parts[0], {
             timestamp: parseInt(parts[1]) || 0,
             author: parts[2] || '',
             trackingStatus: parts[3] || '',
+          });
+        } else if (parts.length === 3) {
+          branchDataMap.set(parts[0], {
+            timestamp: parseInt(parts[1]) || 0,
+            author: parts[2] || '',
+            trackingStatus: '',
           });
         }
       }
@@ -110,13 +116,13 @@ export async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
           author = data.author || undefined;
         } else {
           try {
-            const dateStr = await gitCommand(['log', '-1', '--format=%ct', '--', branch], cwd);
+            const dateStr = await gitCommand(['log', '-1', '--format=%ct', branch], cwd);
             timestamp = parseInt(dateStr);
           } catch {
             timestamp = 0;
           }
           try {
-            author = await gitCommand(['log', '-1', '--format=%an', '--', branch], cwd);
+            author = await gitCommand(['log', '-1', '--format=%an', branch], cwd);
           } catch {}
         }
 
@@ -221,7 +227,7 @@ export async function getRemoteBranchInfo(cwd: string): Promise<RemoteBranchInfo
         daysOld = timestamp ? Math.floor((Date.now() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24)) : 0;
       } else {
         try {
-          const dateStr = await gitCommand(['log', '-1', '--format=%ct', '--', remoteBranch], cwd);
+          const dateStr = await gitCommand(['log', '-1', '--format=%ct', remoteBranch], cwd);
           const timestamp = parseInt(dateStr);
           lastCommitDate = new Date(timestamp * 1000);
           daysOld = isNaN(timestamp) ? 0 : Math.floor((Date.now() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));

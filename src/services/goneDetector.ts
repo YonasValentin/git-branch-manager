@@ -152,9 +152,9 @@ export class GoneDetector implements vscode.Disposable {
       return;
     }
 
-    // Match selected labels back to BranchInfo objects
-    const selectedLabels = new Set(selected.map(s => s.label));
-    const toDelete = goneBranches.filter(b => selectedLabels.has(`$(git-branch) ${b.name}`));
+    // Match selected items back to BranchInfo objects by branch name
+    const selectedNames = new Set(selected.map(s => s.label.replace(/^\$\(git-branch\) /, '')));
+    const toDelete = goneBranches.filter(b => selectedNames.has(b.name));
 
     await this.deleteBranches(repoPath, toDelete);
     this.treeProvider.scheduleRefresh();

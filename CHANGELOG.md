@@ -2,6 +2,21 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [2.0.2] - 2026-02-18
+
+### Fixed
+- **Webview CSP compliance**: Replaced all 36 inline onclick/onchange handlers with data-action event delegation, fixing buttons that were silently blocked by Content Security Policy
+- **QuickPick label matching**: Gone detector and auto-cleanup evaluator now correctly strip icon prefixes when matching user selections back to branch data
+- **Team-safe mode fail-safe**: Auto-cleanup now skips all deletions when git user.name cannot be determined, instead of deleting all branches
+- **Array bounds safety**: Fixed potential undefined access in for-each-ref parsing when tracking status field is absent
+- **Platform detection accuracy**: GitLab HTTPS fallback no longer incorrectly matches GitHub or Azure DevOps URLs
+- **Base branch fallback**: getBaseBranch now checks local branches when no remote is available, preventing errors in local-only repos
+- **Webview panel disposal**: Added onDidDispose handler per VS Code API best practices
+- **Async error handling**: Added proper void annotations and error catching for fire-and-forget async calls
+
+### Changed
+- Removed unused imports and dead code for cleaner bundle
+
 ## [2.0.0] - 2026-02-18
 
 ### Added
