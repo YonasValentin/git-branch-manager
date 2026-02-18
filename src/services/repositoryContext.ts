@@ -40,6 +40,21 @@ export class RepositoryContextManager {
     const folders = vscode.workspace.workspaceFolders ?? [];
 
     for (const folder of folders) {
+      // Primary: check workspace folder root directly via git rev-parse
+      try {
+        const repoPath = await getGitRoot(folder.uri.fsPath);
+        if (repoPath && !this.repositories.has(repoPath)) {
+          this.repositories.set(repoPath, {
+            path: repoPath,
+            workspaceFolder: folder,
+            name: path.basename(repoPath),
+          });
+        }
+      } catch {
+        // Not a git repo at root, try nested scan
+      }
+
+      // Secondary: scan for nested .git dirs (monorepo support)
       try {
         const pattern = new vscode.RelativePattern(folder, '**/.git');
         const gitDirs = await vscode.workspace.findFiles(
@@ -64,7 +79,7 @@ export class RepositoryContextManager {
           }
         }
       } catch {
-        // Skip folder if discovery fails
+        // Skip folder if nested discovery fails
       }
     }
 
