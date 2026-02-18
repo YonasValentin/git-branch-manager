@@ -45,7 +45,9 @@ export async function fetchGitLabMRs(
             resolve(result);
             return;
           }
-          const mrs = JSON.parse(data) as any[];
+          const mrs = JSON.parse(data) as Array<{
+            iid: number; state: string; title: string; web_url: string; source_branch: string;
+          }>;
           for (const mr of mrs) {
             const branchName = mr.source_branch;
             if (branchName && branches.includes(branchName)) {

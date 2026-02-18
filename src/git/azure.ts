@@ -49,10 +49,13 @@ export async function fetchAzurePRs(
             resolve(result);
             return;
           }
-          const body = JSON.parse(data) as { value: any[] };
+          const body = JSON.parse(data) as { value: Array<{
+            pullRequestId: number; status: string; title: string;
+            sourceRefName: string; isDraft?: boolean;
+          }> };
           for (const pr of body.value) {
             // Strip refs/heads/ prefix from sourceRefName
-            const branchName = (pr.sourceRefName as string).replace(/^refs\/heads\//, '');
+            const branchName = pr.sourceRefName.replace(/^refs\/heads\//, '');
             if (branchName && branches.includes(branchName)) {
               const rawState: string = pr.status;
               let state: PRStatus['state'];

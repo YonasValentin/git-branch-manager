@@ -75,7 +75,7 @@ let gitHubSession: vscode.AuthenticationSession | undefined;
  * @param context - Extension context for subscriptions and state
  */
 export async function activate(context: vscode.ExtensionContext) {
-  incrementUsageCount(context);
+  void incrementUsageCount(context);
 
   const repoContext = new RepositoryContextManager(context);
   await repoContext.discoverRepositories();
@@ -532,7 +532,7 @@ async function showBranchManager(
             vscode.window.showInformationMessage(`Deleted branch: ${message.branch}`);
 
             const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
-            context.globalState.update('totalBranchesDeleted', totalDeleted + 1);
+            await context.globalState.update('totalBranchesDeleted', totalDeleted + 1);
             await checkAndShowReviewRequest(context);
 
             await updateWebview();
@@ -556,7 +556,7 @@ async function showBranchManager(
           }
 
           const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
-          context.globalState.update('totalBranchesDeleted', totalDeleted + results.success.length);
+          await context.globalState.update('totalBranchesDeleted', totalDeleted + results.success.length);
 
           if (results.success.length > 0) {
             vscode.window.showInformationMessage(`Deleted ${results.success.length} branches`);
@@ -2430,7 +2430,7 @@ async function checkAndShowReviewRequest(context: vscode.ExtensionContext) {
     (reviewRequestCount === 2 && successfulCleanups >= 20 && daysSinceLastRequest > 60);
 
   if (shouldShowReview) {
-    setTimeout(() => showReviewRequest(context), 2000);
+    setTimeout(() => void showReviewRequest(context), 2000);
   }
 }
 
@@ -2451,31 +2451,31 @@ async function showReviewRequest(context: vscode.ExtensionContext) {
 
   if (result === 'Leave a Review') {
     const extensionId = 'YonasValentinMougaardKristensen.git-branch-manager-pro';
-    vscode.env.openExternal(vscode.Uri.parse(`https://marketplace.visualstudio.com/items?itemName=${extensionId}&ssr=false#review-details`));
-    context.globalState.update('hasReviewed', true);
+    void vscode.env.openExternal(vscode.Uri.parse(`https://marketplace.visualstudio.com/items?itemName=${extensionId}&ssr=false#review-details`));
+    await context.globalState.update('hasReviewed', true);
   } else if (result === "Don't Ask Again") {
-    context.globalState.update('hasReviewed', true);
+    await context.globalState.update('hasReviewed', true);
   } else {
-    context.globalState.update('reviewRequestCount', reviewRequestCount + 1);
+    await context.globalState.update('reviewRequestCount', reviewRequestCount + 1);
   }
 
-  context.globalState.update('lastReviewRequestDate', Date.now());
+  await context.globalState.update('lastReviewRequestDate', Date.now());
 }
 
 /**
  * Increments usage count and shows support message.
  */
-function incrementUsageCount(context: vscode.ExtensionContext) {
+async function incrementUsageCount(context: vscode.ExtensionContext) {
   const usageCount = context.globalState.get<number>('usageCount', 0);
   const hasShownSupport = context.globalState.get<boolean>('hasShownSupportMessage', false);
   const lastShownDate = context.globalState.get<number>('lastSupportMessageDate', 0);
 
-  context.globalState.update('usageCount', usageCount + 1);
+  await context.globalState.update('usageCount', usageCount + 1);
 
   const daysSinceLastShown = (Date.now() - lastShownDate) / (1000 * 60 * 60 * 24);
 
   if ((usageCount === 10 && !hasShownSupport) || (usageCount > 10 && usageCount % 20 === 0 && daysSinceLastShown > 14)) {
-    showSupportMessage(context);
+    void showSupportMessage(context);
   }
 }
 
@@ -2493,13 +2493,13 @@ async function showSupportMessage(context: vscode.ExtensionContext) {
   );
 
   if (result === 'Sponsor on GitHub') {
-    vscode.env.openExternal(vscode.Uri.parse('https://github.com/sponsors/YonasValentin'));
-    context.globalState.update('hasShownSupportMessage', true);
+    void vscode.env.openExternal(vscode.Uri.parse('https://github.com/sponsors/YonasValentin'));
+    await context.globalState.update('hasShownSupportMessage', true);
   } else if (result === "Don't Show Again") {
-    context.globalState.update('hasShownSupportMessage', true);
+    await context.globalState.update('hasShownSupportMessage', true);
   }
 
-  context.globalState.update('lastSupportMessageDate', Date.now());
+  await context.globalState.update('lastSupportMessageDate', Date.now());
 }
 
 /**

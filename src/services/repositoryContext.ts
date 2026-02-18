@@ -25,7 +25,7 @@ export class RepositoryContextManager {
 
     // Listen for workspace folder changes and re-discover
     this.disposable = vscode.workspace.onDidChangeWorkspaceFolders(() => {
-      this.discoverRepositories();
+      void this.discoverRepositories();
     });
   }
 

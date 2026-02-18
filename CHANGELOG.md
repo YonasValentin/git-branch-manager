@@ -10,14 +10,15 @@ All notable changes to the "Git Branch Manager" extension will be documented in 
 - **JSON injection in script blocks**: Added `</script>` breakout protection for `JSON.stringify` in cleanup rules, branch names, and current branch data
 - **Pipe delimiter corruption**: Replaced `|` with null byte (`%x00`) separator in all `--pretty=format` and `--format` git commands — commit messages containing `|` no longer corrupt branch comparison, timeline, and stash parsing
 - **Substring false positives**: `getBaseBranch` local fallback now splits branch list and uses exact match instead of `string.includes()` (e.g. `maintain` no longer matches `main`)
-- **Unawaited globalState writes**: All 8 `globalState.update()` calls in branch commands now properly awaited
+- **Unawaited globalState writes**: All 18 `globalState.update()` calls now properly awaited (branch commands, review prompts, usage tracking, support messages)
 - **HTTP response safety**: Added 5 MB response body cap and 10-second timeout to GitHub, GitLab, and Azure DevOps API calls
 - **URL encoding in API paths**: GitHub owner/repo and Azure DevOps organization now URL-encoded in API request paths
 - **Nonce generation**: Replaced `Math.random()` with `crypto.randomBytes()` for CSP nonce generation
 - **Webview security**: Added `localResourceRoots: []` to restrict webview file system access
 - **Merge-base safety**: Added `--` separator to `merge-base` call to prevent branch names from being interpreted as flags
 - **CHANGELOG visible on marketplace**: Removed CHANGELOG.md from `.vscodeignore` so the Changelog tab is populated
-- **Type safety**: Replaced `error: any` with `error: unknown` + `instanceof` guards across commands; removed `as any` cast in remote branch selection
+- **Type safety**: Replaced `error: any` with `error: unknown` + `instanceof` guards across commands; removed `as any` cast in remote branch selection; replaced `as any[]` with typed interfaces in GitHub, GitLab, and Azure DevOps API response parsing
+- **Async error handling**: Added `void` annotations for fire-and-forget async calls (`incrementUsageCount`, `showSupportMessage`, `showReviewRequest`, `discoverRepositories`, `openExternal`)
 - **Unused code**: Removed unused `getCurrentBranch` import and call in worktree command
 
 ## [2.0.2] - 2026-02-18

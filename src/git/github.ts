@@ -58,13 +58,16 @@ export async function fetchGitHubPRs(
             resolve(result);
             return;
           }
-          const prs = JSON.parse(data) as any[];
+          const prs = JSON.parse(data) as Array<{
+            number: number; state: string; title: string; html_url: string;
+            draft?: boolean; merged_at?: string; head?: { ref?: string };
+          }>;
           for (const pr of prs) {
             const branchName = pr.head?.ref;
             if (branchName && branches.includes(branchName)) {
               result.set(branchName, {
                 number: pr.number,
-                state: pr.merged_at ? 'merged' : pr.draft ? 'draft' : pr.state,
+                state: pr.merged_at ? 'merged' : pr.draft ? 'draft' : (pr.state === 'closed' ? 'closed' : 'open'),
                 title: pr.title,
                 url: pr.html_url,
               });
