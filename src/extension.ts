@@ -1510,6 +1510,7 @@ function getWebviewContent(
       <button class="btn" onclick="runCompare()">Compare</button>
     </div>
     <div id="comparison-results"></div>
+    <div id="timeline-result" class="comparison-section" style="margin-top: 16px;"></div>
   </div>
 
   <div id="tools-tab" class="tab-content">
@@ -2141,16 +2142,21 @@ function getWebviewContent(
             noDiffP.textContent = 'No differences found between the two branches.';
             resultsContainer.appendChild(noDiffP);
           }
+
+          // Request timeline for branchA after comparison results are rendered
+          vscode.postMessage({ command: 'getTimeline', branchName: data.branchA });
           break;
         }
 
         case 'timelineResult': {
           const data = msg.data;
           if (!data || !data.commits || data.commits.length === 0) break;
-          const safeId = 'timeline-' + String(data.branchName).replace(/[^a-zA-Z0-9]/g, '-');
-          const timelineContainer = document.getElementById(safeId);
+          const timelineContainer = document.getElementById('timeline-result');
           if (!timelineContainer) break;
           while (timelineContainer.firstChild) timelineContainer.removeChild(timelineContainer.firstChild);
+          const heading = document.createElement('h3');
+          heading.textContent = 'Recent commits on ' + String(data.branchName);
+          timelineContainer.appendChild(heading);
           renderCommits(data.commits, timelineContainer);
           break;
         }
