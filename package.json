@@ -2,7 +2,7 @@
   "name": "git-branch-manager-pro",
   "displayName": "Git Branch Manager - Clean & Organize",
   "description": "Clean up old and merged Git branches with one click. Dashboard view, bulk delete, branch templates.",
-  "version": "2.0.4",
+  "version": "2.1.0",
   "publisher": "yonasvalentinmougaardkristensen",
   "engines": {
     "vscode": "^1.74.0"
@@ -308,7 +308,11 @@
         },
         "gitBranchManager.goneBranchAction": {
           "type": "string",
-          "enum": ["prompt", "auto-delete", "notify-only"],
+          "enum": [
+            "prompt",
+            "auto-delete",
+            "notify-only"
+          ],
           "enumItemLabels": [
             "Prompt — ask before deleting",
             "Auto-delete silently",
@@ -324,13 +328,25 @@
         },
         "gitBranchManager.autoCleanupOnEvents": {
           "type": "array",
-          "items": { "type": "string", "enum": ["fetch", "pull", "merge"] },
-          "default": ["fetch", "pull"],
+          "items": {
+            "type": "string",
+            "enum": [
+              "fetch",
+              "pull",
+              "merge"
+            ]
+          },
+          "default": [
+            "fetch",
+            "pull"
+          ],
           "description": "Git events that trigger automatic cleanup evaluation. 'merge' also triggers on git reset (ORIG_HEAD is shared)."
         },
         "gitBranchManager.cleanupExclusionPatterns": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "markdownDescription": "Glob patterns for branches never to auto-delete. Example: `release/*`, `protect-*`"
         },

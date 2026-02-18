@@ -459,38 +459,6 @@ async function showBranchManager(
       getAllBranchNames(gitRoot),
     ]);
 
-    // Platform-aware PR fetching (PLAT-01, PLAT-02, PLAT-03, PLAT-05)
-    const platformInfo = await detectPlatform(gitRoot);
-    let prMap = new Map<string, PRStatus>();
-    const branchNames = branches.map(b => b.name);
-
-    if (platformInfo.platform === 'github') {
-      const token = gitHubSession?.accessToken;
-      if (platformInfo.owner && platformInfo.repo) {
-        prMap = await fetchGitHubPRs(platformInfo.owner, platformInfo.repo, branchNames, token);
-      }
-    } else if (platformInfo.platform === 'gitlab') {
-      const token = await context.secrets.get(gitlabTokenKey);
-      if (token && platformInfo.gitlabHost && platformInfo.projectPath) {
-        prMap = await fetchGitLabMRs(platformInfo.gitlabHost, platformInfo.projectPath, branchNames, token);
-      }
-    } else if (platformInfo.platform === 'azure') {
-      const token = await context.secrets.get(azureTokenKey);
-      if (token && platformInfo.organization && platformInfo.project && platformInfo.azureRepo) {
-        prMap = await fetchAzurePRs(platformInfo.organization, platformInfo.project, platformInfo.azureRepo, branchNames, token);
-      }
-    }
-
-    // Apply PR status to branches for webview rendering
-    for (const branch of branches) {
-      const pr = prMap.get(branch.name);
-      if (pr) { branch.prStatus = pr; }
-    }
-
-    // Push PR data to tree view as well
-    branchTreeProvider.setPRStatuses(prMap);
-    branchTreeProvider.scheduleRefresh();
-
     const branchNotesMap = getBranchNotes(context, gitRoot);
     const branchNotes: Record<string, BranchNote> = Object.fromEntries(branchNotesMap);
     const cleanupRulesArray = getCleanupRules(context, gitRoot);
@@ -498,7 +466,9 @@ async function showBranchManager(
       cleanupRulesArray.map(rule => [rule.id, rule])
     );
     const recoveryLog = getRecoveryLog(context, gitRoot);
+    const showSponsorBanner = !context.globalState.get<boolean>('sponsorBannerDismissed', false);
 
+    // Phase 1: Render immediately with local git data (no PR API calls)
     panel.webview.html = getWebviewContent(
       panel.webview,
       branches,
@@ -513,8 +483,45 @@ async function showBranchManager(
       baseBranch,
       {},
       recoveryLog,
-      allBranchNames
+      allBranchNames,
+      showSponsorBanner
     );
+
+    // Phase 2: Fetch PR data asynchronously and push to webview
+    void (async () => {
+      try {
+        const platformInfo = await detectPlatform(gitRoot);
+        let prMap = new Map<string, PRStatus>();
+        const branchNames = branches.map(b => b.name);
+
+        if (platformInfo.platform === 'github') {
+          const token = gitHubSession?.accessToken;
+          if (platformInfo.owner && platformInfo.repo) {
+            prMap = await fetchGitHubPRs(platformInfo.owner, platformInfo.repo, branchNames, token);
+          }
+        } else if (platformInfo.platform === 'gitlab') {
+          const token = await context.secrets.get(gitlabTokenKey);
+          if (token && platformInfo.gitlabHost && platformInfo.projectPath) {
+            prMap = await fetchGitLabMRs(platformInfo.gitlabHost, platformInfo.projectPath, branchNames, token);
+          }
+        } else if (platformInfo.platform === 'azure') {
+          const token = await context.secrets.get(azureTokenKey);
+          if (token && platformInfo.organization && platformInfo.project && platformInfo.azureRepo) {
+            prMap = await fetchAzurePRs(platformInfo.organization, platformInfo.project, platformInfo.azureRepo, branchNames, token);
+          }
+        }
+
+        if (prMap.size > 0) {
+          const prData: Record<string, PRStatus> = Object.fromEntries(prMap);
+          void panel.webview.postMessage({ command: 'prStatusUpdate', data: prData });
+        }
+
+        branchTreeProvider.setPRStatuses(prMap);
+        branchTreeProvider.scheduleRefresh();
+      } catch {
+        // PR fetch is supplementary — don't block on failure
+      }
+    })();
   }
 
   await updateWebview();
@@ -856,6 +863,28 @@ async function showBranchManager(
           }
           break;
 
+        case 'openSupport':
+          void vscode.env.openExternal(vscode.Uri.parse('https://www.buymeacoffee.com/YonasValentin'));
+          break;
+
+        case 'openSponsor':
+          void vscode.env.openExternal(vscode.Uri.parse('https://github.com/sponsors/YonasValentin'));
+          break;
+
+        case 'openGithub':
+          void vscode.env.openExternal(vscode.Uri.parse('https://github.com/YonasValentin/git-branch-manager/issues'));
+          break;
+
+        case 'dismissSponsor':
+          await context.globalState.update('sponsorBannerDismissed', true);
+          break;
+
+        case 'openUrl':
+          if (typeof message.url === 'string') {
+            void vscode.env.openExternal(vscode.Uri.parse(message.url));
+          }
+          break;
+
         case 'refresh':
           await updateWebview();
           break;
@@ -938,7 +967,8 @@ function getWebviewContent(
   _baseBranch: string,
   _githubPRs: Record<string, PRStatus>,
   recoveryLog: DeletedBranchEntry[],
-  allBranchNames: string[] = []
+  allBranchNames: string[] = [],
+  showSponsorBanner: boolean = false
 ): string {
   const nonce = getNonce();
 
@@ -946,6 +976,10 @@ function getWebviewContent(
   const staleBranches = branches.filter((b) => !b.isMerged && b.daysOld > daysUntilStale && !b.isCurrentBranch);
   const goneBranches = branches.filter((b) => b.remoteGone && !b.isCurrentBranch);
   const activeBranches = branches.filter((b) => !b.isMerged && b.daysOld <= daysUntilStale && !b.remoteGone);
+
+  const avgHealth = branches.length > 0
+    ? Math.round(branches.reduce((sum, b) => sum + (b.healthScore || 100), 0) / branches.length)
+    : 100;
 
   const allBranches = [...mergedBranches, ...staleBranches, ...goneBranches, ...activeBranches];
 
@@ -1421,6 +1455,24 @@ function getWebviewContent(
     .status-d { background: var(--vscode-gitDecoration-deletedResourceForeground, #f85149); color: #fff; }
     .status-r { background: var(--vscode-gitDecoration-renamedResourceForeground, #58a6ff); color: #fff; }
     .file-path { font-family: monospace; font-size: 12px; }
+
+    .health-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 8px 12px; background: var(--vscode-editor-inactiveSelectionBackground); border-radius: 4px; }
+    .health-score { font-size: 24px; font-weight: 600; }
+    .health-score-healthy { color: var(--vscode-testing-iconPassed, #4ec9b0); }
+    .health-score-warning { color: var(--vscode-editorWarning-foreground, #cca700); }
+    .health-score-critical { color: var(--vscode-editorError-foreground, #f14c4c); }
+    .health-label { font-size: 11px; opacity: 0.7; }
+    .stats-bar { display: flex; gap: 16px; font-size: 12px; opacity: 0.8; flex: 1; }
+    .stats-bar .warn { color: var(--vscode-editorWarning-foreground); }
+
+    .footer { margin-top: 12px; font-size: 11px; opacity: 0.5; display: flex; gap: 12px; }
+    .footer a { color: var(--vscode-textLink-foreground); text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
+
+    .sponsor-banner { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-top: 16px; background: var(--vscode-inputValidation-infoBackground); border: 1px solid var(--vscode-inputValidation-infoBorder); border-radius: 4px; font-size: 12px; }
+    .sponsor-banner a { color: var(--vscode-textLink-foreground); font-weight: 500; }
+    .sponsor-dismiss { background: none; border: none; color: var(--vscode-foreground); opacity: 0.6; cursor: pointer; margin-left: auto; padding: 0 4px; font-size: 16px; }
+    .sponsor-dismiss:hover { opacity: 1; }
   </style>
 </head>
 <body>
@@ -1462,6 +1514,20 @@ function getWebviewContent(
   </div>
 
   <div id="branches-tab" class="tab-content active">
+    <div class="health-bar">
+      <div>
+        <div class="health-score health-score-${avgHealth >= 70 ? 'healthy' : avgHealth >= 40 ? 'warning' : 'critical'}">${avgHealth}</div>
+        <div class="health-label">Health Score</div>
+      </div>
+      <div class="stats-bar">
+        <span><strong>${branches.length}</strong> total</span>
+        <span class="${mergedBranches.length > 0 ? 'warn' : ''}"><strong>${mergedBranches.length}</strong> merged</span>
+        <span class="${staleBranches.length > 0 ? 'warn' : ''}"><strong>${staleBranches.length}</strong> stale</span>
+        <span class="${goneBranches.length > 0 ? 'warn' : ''}"><strong>${goneBranches.length}</strong> orphaned</span>
+        <span><strong>${activeBranches.length}</strong> active</span>
+      </div>
+    </div>
+
     <div class="toolbar">
       <button class="btn" data-action="deleteSelected">Delete Selected</button>
       <button class="btn btn-secondary" data-action="selectMerged">Select Merged</button>
@@ -1664,6 +1730,18 @@ function getWebviewContent(
         </div>
       </div>
     </div>
+  </div>
+
+  ${showSponsorBanner ? `<div class="sponsor-banner" id="sponsor-banner">
+    <span>Find this useful?</span>
+    <a href="#" data-action="openSponsor">Sponsor on GitHub</a>
+    <button class="sponsor-dismiss" data-action="dismissSponsor" title="Dismiss">\u00d7</button>
+  </div>` : ''}
+
+  <div class="footer">
+    <a href="#" data-action="openSponsor">Sponsor</a>
+    <a href="#" data-action="openSupport">Buy Me a Coffee</a>
+    <a href="#" data-action="openGithub">Report Issue</a>
   </div>
 
   <script nonce="${nonce}">
@@ -2265,6 +2343,32 @@ function getWebviewContent(
           break;
         }
 
+        case 'prStatusUpdate': {
+          var prData = msg.data;
+          for (var branchName in prData) {
+            if (!prData.hasOwnProperty(branchName)) continue;
+            var pr = prData[branchName];
+            var row = document.querySelector('tr[data-branch="' + CSS.escape(branchName) + '"]');
+            if (row) {
+              var cells = row.querySelectorAll('td');
+              if (cells.length >= 7) {
+                var infoCell = cells[6];
+                var prLink = document.createElement('a');
+                prLink.className = 'pr-link';
+                prLink.href = '#';
+                prLink.title = pr.title;
+                prLink.textContent = '#' + pr.number + ' (' + pr.state + ')';
+                prLink.addEventListener('click', (function(url) {
+                  return function(e) { e.preventDefault(); vscode.postMessage({ command: 'openUrl', url: url }); };
+                })(pr.url));
+                infoCell.prepend(document.createTextNode(' '));
+                infoCell.prepend(prLink);
+              }
+            }
+          }
+          break;
+        }
+
         case 'timelineResult': {
           const data = msg.data;
           if (!data || !data.commits || data.commits.length === 0) break;
@@ -2325,6 +2429,14 @@ function getWebviewContent(
         case 'addCleanupRule': addCleanupRule(); break;
         case 'exportRules': exportRules(); break;
         case 'importRules': importRules(); break;
+        case 'openSupport': vscode.postMessage({ command: 'openSupport' }); break;
+        case 'openSponsor': vscode.postMessage({ command: 'openSponsor' }); break;
+        case 'openGithub': vscode.postMessage({ command: 'openGithub' }); break;
+        case 'dismissSponsor':
+          vscode.postMessage({ command: 'dismissSponsor' });
+          var banner = document.getElementById('sponsor-banner');
+          if (banner) banner.remove();
+          break;
       }
     });
     // Handle checkbox change events via delegation
