@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-02-18
 **Current Milestone:** v2.0 High-Value Features
-**Current Phase:** 12
+**Current Phase:** 13
 
 ## Project Reference
 
@@ -10,17 +10,17 @@ See: .planning/PROJECT.md (updated 2026-02-17)
 
 **Core Value:** Effortless branch hygiene — developers keep repositories clean without thinking about it
 
-**Current Focus:** Phase 12 — Cleanup Rules UI
+**Current Focus:** Phase 13 — Enhanced Comparison & Timeline
 
 ## Current Position
 
 **Milestone:** v2.0 High-Value Features (Phases 6-14)
-**Phase:** 12 of 14 (Cleanup Rules UI) — In Progress
-**Plan:** 2 of 2 complete in phase 12
-**Status:** Phase 12 complete
-**Last activity:** 2026-02-18 — Completed 12-02-PLAN.md (dry-run preview per rule, JSON export/import via clipboard)
+**Phase:** 13 of 14 (Enhanced Comparison & Timeline) — In Progress
+**Plan:** 1 of ? complete in phase 13
+**Status:** In Progress
+**Last activity:** 2026-02-18 — Completed 13-01-PLAN.md (branch timeline tooltips via resolveTreeItem, Compare tab in webview)
 
-Progress: [█████░░░░░] 64% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plans 01+02 complete, Phase 12 Plans 01+02 complete)
+Progress: [██████░░░░] 71% (Phase 6 complete, Phase 7 complete, Phase 8 complete, Phase 9 Plans 01+02 complete, Phase 10 Plans 01+02 complete, Phase 11 Plans 01+02 complete, Phase 12 Plans 01+02 complete, Phase 13 Plan 01 complete)
 
 ## Performance Metrics
 
@@ -40,7 +40,8 @@ Progress: [█████░░░░░] 64% (Phase 6 complete, Phase 7 comple
 | 9. Sidebar Tree View | 2/2 | Complete |
 | 10. Gone Branch Auto-Detection | 2/2 | Complete |
 | 11. Event-Driven Auto-Cleanup | 2/2 | Complete |
-| 12. Cleanup Rules UI | 1/? | In Progress |
+| 12. Cleanup Rules UI | 2/2 | Complete |
+| 13. Enhanced Comparison & Timeline | 1/? | In Progress |
 
 **Recent Trend:**
 - Phase 8 completed 2/2 plans in ~3 minutes each
@@ -51,7 +52,8 @@ Progress: [█████░░░░░] 64% (Phase 6 complete, Phase 7 comple
 - Phase 11 Plan 01 completed in ~2 minutes
 - Phase 11 Plan 02 completed in ~1 minute
 - Phase 12 Plan 01 completed in ~3 minutes
-- Trend: Stable, fast execution (avg ~2 min per plan)
+- Phase 13 Plan 01 completed in ~4 minutes
+- Trend: Stable, fast execution (avg ~2-4 min per plan)
 
 ## Progress
 
@@ -76,7 +78,7 @@ Progress: [█████░░░░░] 64% (Phase 6 complete, Phase 7 comple
 | 10. Gone Branch Auto-Detection | Complete (2/2) | 2026-02-17 | 2026-02-17 |
 | 11. Event-Driven Auto-Cleanup | Complete (2/2) | 2026-02-17 | 2026-02-17 |
 | 12. Cleanup Rules UI | Complete (2/2) | 2026-02-17 | 2026-02-18 |
-| 13. Enhanced Comparison & Timeline | Pending | - | - |
+| 13. Enhanced Comparison & Timeline | In Progress (1/?) | 2026-02-18 | - |
 | 14. Platform Integration | Pending | - | - |
 
 ## Accumulated Context
@@ -124,6 +126,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - **Phase 12 Plan 02 (importRules Validation)**: Filter-then-error approach — invalid entries silently filtered, error only if zero valid rules remain after filtering
 - **Phase 12 Plan 02 (Clipboard via Extension Host)**: vscode.env.clipboard used exclusively in extension host; navigator.clipboard not used in webview — correct VS Code extension pattern
 - **Phase 12 Plan 02 (pendingPreviewRuleId)**: Single variable tracks in-flight evaluateRule request — sufficient since user can only click one Preview at a time
+- **Phase 13 Plan 01 (getBranchTimeline)**: Uses execFile with branchName positional arg before --max-count flag to avoid git flag misinterpretation
+- **Phase 13 Plan 01 (resolveTreeItem)**: Replaces eager tooltip with lazy one — constructor tooltip remains as fallback for immediate display
+- **Phase 13 Plan 01 (compareBranches handler)**: Upgraded from showInformationMessage stub to postMessage with full ComparisonResult data
+- **Phase 13 Plan 01 (allBranchNames injection)**: Fetched via Promise.all in updateWebview, injected as JSON constant for Compare tab dropdowns
 
 ### Pending Todos
 
@@ -147,11 +153,14 @@ None yet.
 - ✅ Plan 01: renderRules(), addCleanupRule() form builder, saveNewRule/toggleRule/deleteRule wired to saveCleanupRules
 - ✅ Plan 02: previewRule() with ruleEvaluationResult handler, exportRules/importRules clipboard commands, Preview/Export/Import toolbar buttons
 
+**Phase 13 (Enhanced Comparison & Timeline) — IN PROGRESS (1/? plans):**
+- ✅ Plan 01: getBranchTimeline(), resolveTreeItem() on BranchTreeProvider, Compare tab in webview, comparisonResult/timelineResult handlers
+
 ## Session Continuity
 
 Last session: 2026-02-18
-Stopped at: Completed 12-02-PLAN.md — Phase 12 complete (all RULE-01 through RULE-05 satisfied)
-Resume: Proceed to Phase 13 (Enhanced Comparison & Timeline)
+Stopped at: Completed 13-01-PLAN.md — Phase 13 Plan 01 complete (TIME-01/02/03, COMP-01/02 satisfied)
+Resume: Proceed to Phase 13 Plan 02 (if exists) or Phase 14 (Platform Integration)
 
 ---
 
