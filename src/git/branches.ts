@@ -216,7 +216,7 @@ export async function getRemoteBranchInfo(cwd: string): Promise<RemoteBranchInfo
       const [remote, ...nameParts] = remoteBranch.split('/');
       const branchName = nameParts.join('/');
 
-      if (protectedSet.has(branchName)) continue;
+      if (!branchName || protectedSet.has(branchName)) continue;
 
       let daysOld = 0;
       let lastCommitDate: Date | undefined;

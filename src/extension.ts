@@ -16,7 +16,7 @@ import {
 import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem, GoneDetector, AutoCleanupEvaluator, DiffContentProvider, GIT_DIFF_SCHEME } from './services';
 
 // Utilities
-import { getNonce, formatAge, escapeHtml, getHealthColor, validateRegexPattern } from './utils';
+import { getNonce, formatAge, escapeHtml, validateRegexPattern } from './utils';
 
 // Git operations
 import {
@@ -950,7 +950,7 @@ function getWebviewContent(
   const allBranches = [...mergedBranches, ...staleBranches, ...goneBranches, ...activeBranches];
 
   function renderBranchRow(branch: BranchInfo): string {
-    const healthColor = getHealthColor(branch.healthStatus || 'healthy');
+    const healthStatus = branch.healthStatus || 'healthy';
     const note = branchNotes[branch.name];
     const noteHtml = note ? `<div class="branch-note" title="${escapeHtml(note.note)}">📝 ${escapeHtml(note.note)}</div>` : '';
 
@@ -973,7 +973,7 @@ function getWebviewContent(
           <div class="branch-name">${escapeHtml(branch.name)}</div>
           ${noteHtml}
         </td>
-        <td><span class="health-indicator" style="background-color: ${healthColor};" title="${escapeHtml(branch.healthReason || '')}"></span></td>
+        <td><span class="health-indicator health-${healthStatus}" title="${escapeHtml(branch.healthReason || '')}"></span></td>
         <td>${formatAge(branch.daysOld)}</td>
         <td>${branch.isMerged ? '✓' : ''}</td>
         <td>${escapeHtml(branch.author || '')}</td>
@@ -1264,6 +1264,20 @@ function getWebviewContent(
       height: 12px;
       border-radius: 50%;
     }
+
+    .health-healthy { background-color: var(--vscode-testing-iconPassed, #4ec9b0); }
+    .health-warning { background-color: var(--vscode-editorWarning-foreground, #cca700); }
+    .health-critical { background-color: var(--vscode-editorError-foreground, #f14c4c); }
+    .health-danger { background-color: var(--vscode-inputValidation-errorBorder, #be1100); }
+
+    .flex-1 { flex: 1; }
+    .compare-label { width: 80px; font-size: 12px; }
+    .compare-row { margin-bottom: 12px; }
+    .timeline-section { margin-top: 16px; }
+    .hint-text { font-size: 12px; color: var(--vscode-descriptionForeground); }
+    .hint-text-mt { font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 8px; }
+    .recovery-count { margin-left: auto; color: var(--vscode-descriptionForeground); }
+    .rule-actions { display: flex; gap: 8px; margin-top: 12px; }
 
     .branch-name {
       font-weight: 500;
@@ -1572,14 +1586,14 @@ function getWebviewContent(
   <div id="recovery-tab" class="tab-content">
     <div class="toolbar">
       <h3>🔄 Recovery Log</h3>
-      <span style="margin-left: auto; color: var(--vscode-descriptionForeground);">
+      <span class="recovery-count">
         ${recoveryLog.length} deleted branch${recoveryLog.length !== 1 ? 'es' : ''} available for recovery
       </span>
     </div>
 
     ${
       recoveryLog.length === 0
-        ? '<div class="empty-state"><p>No deleted branches to recover.</p><p style="font-size: 12px; margin-top: 8px;">Deleted branches will appear here for recovery.</p></div>'
+        ? '<div class="empty-state"><p>No deleted branches to recover.</p><p class="hint-text-mt">Deleted branches will appear here for recovery.</p></div>'
         : `
     <table>
       <thead>
@@ -1601,18 +1615,18 @@ function getWebviewContent(
   <div id="compare-tab" class="tab-content">
     <div class="tool-card">
       <h3>Compare Branches</h3>
-      <div class="filter-row" style="margin-bottom: 12px;">
-        <label style="width: 80px; font-size: 12px;">Branch A:</label>
-        <select id="compare-branch-a" style="flex: 1;"></select>
+      <div class="filter-row compare-row">
+        <label class="compare-label">Branch A:</label>
+        <select id="compare-branch-a" class="flex-1"></select>
       </div>
-      <div class="filter-row" style="margin-bottom: 12px;">
-        <label style="width: 80px; font-size: 12px;">Branch B:</label>
-        <select id="compare-branch-b" style="flex: 1;"></select>
+      <div class="filter-row compare-row">
+        <label class="compare-label">Branch B:</label>
+        <select id="compare-branch-b" class="flex-1"></select>
       </div>
       <button class="btn" data-action="runCompare">Compare</button>
     </div>
     <div id="comparison-results"></div>
-    <div id="timeline-result" class="comparison-section" style="margin-top: 16px;"></div>
+    <div id="timeline-result" class="comparison-section timeline-section"></div>
   </div>
 
   <div id="tools-tab" class="tab-content">
@@ -1624,7 +1638,7 @@ function getWebviewContent(
           <input type="text" id="rename-replacement" placeholder="Replacement" value="feat/">
           <button class="btn" data-action="batchRename">Preview Rename</button>
         </div>
-        <p style="font-size: 12px; color: var(--vscode-descriptionForeground);">
+        <p class="hint-text">
           Use regex patterns to rename multiple branches. Example: <code>feature/</code> → <code>feat/</code>
         </p>
       </div>
@@ -1632,10 +1646,10 @@ function getWebviewContent(
       <div class="tool-card">
         <h3>🎯 Regex Branch Selection</h3>
         <div class="filter-row">
-          <input type="text" id="regex-pattern" placeholder="Enter regex pattern" style="flex: 1;">
+          <input type="text" id="regex-pattern" placeholder="Enter regex pattern" class="flex-1">
           <button class="btn" data-action="selectByRegex">Select Matching</button>
         </div>
-        <p style="font-size: 12px; color: var(--vscode-descriptionForeground);">
+        <p class="hint-text">
           Select branches matching a regex pattern. Example: <code>^feature/.*</code>
         </p>
       </div>
@@ -1643,7 +1657,7 @@ function getWebviewContent(
       <div class="tool-card">
         <h3>🤖 Auto-Cleanup Rules</h3>
         <div id="rules-container"></div>
-        <div style="display:flex;gap:8px;margin-top:12px;">
+        <div class="rule-actions">
           <button class="btn" data-action="addCleanupRule">Add Rule</button>
           <button class="btn btn-secondary" data-action="exportRules">Export to Clipboard</button>
           <button class="btn btn-secondary" data-action="importRules">Import from Clipboard</button>
