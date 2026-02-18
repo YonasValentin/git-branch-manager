@@ -374,6 +374,29 @@ export async function compareBranches(cwd: string, branchA: string, branchB: str
 }
 
 /**
+ * Gets the last N commits for a branch as a timeline.
+ * @param cwd - Working directory
+ * @param branchName - Branch name
+ * @param limit - Maximum number of commits to return (default 5)
+ * @returns Array of commit info objects
+ */
+export async function getBranchTimeline(cwd: string, branchName: string, limit: number = 5): Promise<CommitInfo[]> {
+  try {
+    const { stdout } = await execFile(
+      'git',
+      ['log', branchName, `--max-count=${limit}`, '--pretty=format:%h|%s|%an|%cr'],
+      { cwd, maxBuffer: 1024 * 1024 }
+    );
+    return stdout.trim().split('\n').filter((l: string) => l).map((line: string) => {
+      const [hash, message, author, date] = line.split('|');
+      return { hash, message, author, date, daysOld: 0 };
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Gets the commit hash that a branch points to.
  * @param cwd - Working directory
  * @param branchName - Branch name

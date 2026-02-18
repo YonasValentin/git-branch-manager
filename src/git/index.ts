@@ -17,6 +17,7 @@ export {
   renameBranch,
   deleteBranchForce,
   compareBranches,
+  getBranchTimeline,
   getCommitHash,
   restoreBranch
 } from './branches';

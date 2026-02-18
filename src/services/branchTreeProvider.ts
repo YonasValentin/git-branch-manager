@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { BranchInfo } from '../types';
-import { getBranchInfo } from '../git';
+import { getBranchInfo, getBranchTimeline } from '../git';
 import { RepositoryContextManager } from './repositoryContext';
 
 /**
@@ -175,6 +175,40 @@ export class BranchTreeProvider
     }
     // StatusGroupItem and LoadMoreItem are root or unresolvable
     return undefined;
+  }
+
+  /**
+   * Lazily resolves the tree item tooltip with last N commits from git log.
+   * Called by VS Code when the user hovers a tree item.
+   */
+  async resolveTreeItem(
+    item: vscode.TreeItem,
+    element: BranchTreeNode,
+    token: vscode.CancellationToken
+  ): Promise<vscode.TreeItem> {
+    if (!(element instanceof BranchItem)) return item;
+    if (token.isCancellationRequested) return item;
+    try {
+      const commits = await getBranchTimeline(element.repoPath, element.branch.name, 5);
+      const md = new vscode.MarkdownString(undefined, true);
+      md.appendMarkdown(`### ${element.branch.name}\n`);
+      md.appendMarkdown(`- **Health Score:** ${element.branch.healthScore ?? 100}\n`);
+      if (element.branch.healthReason) {
+        md.appendMarkdown(`- **Reason:** ${element.branch.healthReason}\n`);
+      }
+      md.appendMarkdown(`- **Days Old:** ${element.branch.daysOld}\n`);
+      md.appendMarkdown(`- **Merged:** ${element.branch.isMerged ? 'Yes' : 'No'}\n`);
+      if (commits.length > 0) {
+        md.appendMarkdown(`\n**Last ${commits.length} commits:**\n`);
+        for (const c of commits) {
+          md.appendMarkdown(`- \`${c.hash}\` ${c.message} — ${c.author}, ${c.date}\n`);
+        }
+      }
+      item.tooltip = md;
+    } catch {
+      // Silent degradation — keep existing tooltip
+    }
+    return item;
   }
 
   /**
