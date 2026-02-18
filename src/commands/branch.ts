@@ -59,11 +59,12 @@ export async function createBranchFromTemplate(repoContext: RepositoryContextMan
   try {
     await gitCommand(['checkout', '-b', branchName], gitRoot);
     vscode.window.showInformationMessage(`Created branch: ${branchName}`);
-  } catch (error: any) {
-    if (error.message.includes('already exists')) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes('already exists')) {
       vscode.window.showErrorMessage(`Branch '${branchName}' already exists`);
     } else {
-      vscode.window.showErrorMessage(`Failed to create branch: ${error.message}`);
+      vscode.window.showErrorMessage(`Failed to create branch: ${errorMessage}`);
     }
   }
 }
@@ -103,7 +104,7 @@ export async function quickCleanup(
     await deleteMultipleBranches(gitRoot, toDelete.map((b) => b.name), context);
     if (context && toDelete.length > 0) {
       const usageCount = context.globalState.get<number>('usageCount', 0);
-      context.globalState.update('usageCount', usageCount + 1);
+      await context.globalState.update('usageCount', usageCount + 1);
     }
     if (updateStatusBar) {
       await updateStatusBar();
@@ -126,10 +127,11 @@ export async function switchBranch(cwd: string, branchName: string): Promise<voi
   if (result !== 'Yes') return;
 
   try {
-    await gitCommand(['checkout', '--', branchName], cwd);
+    await gitCommand(['checkout', branchName], cwd);
     vscode.window.showInformationMessage(`Switched to branch: ${branchName}`);
-  } catch (error: any) {
-    vscode.window.showErrorMessage(`Failed to switch branch: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    vscode.window.showErrorMessage(`Failed to switch branch: ${errorMessage}`);
   }
 }
 
@@ -172,7 +174,7 @@ export async function deleteBranch(cwd: string, branchName: string, context?: vs
 
     if (context) {
       const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
-      context.globalState.update('totalBranchesDeleted', totalDeleted + 1);
+      await context.globalState.update('totalBranchesDeleted', totalDeleted + 1);
     }
     return true;
   } catch (error: unknown) {
@@ -280,8 +282,8 @@ export async function deleteMultipleBranches(cwd: string, branches: string[], co
     const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
     const successfulCleanups = context.globalState.get<number>('successfulCleanups', 0);
 
-    context.globalState.update('totalBranchesDeleted', totalDeleted + result.deleted);
-    context.globalState.update('successfulCleanups', successfulCleanups + 1);
+    await context.globalState.update('totalBranchesDeleted', totalDeleted + result.deleted);
+    await context.globalState.update('successfulCleanups', successfulCleanups + 1);
 
     await checkAndShowReviewRequest(context);
   }
@@ -370,14 +372,14 @@ async function showReviewRequest(context: vscode.ExtensionContext): Promise<void
   if (result === 'Leave a Review') {
     const extensionId = 'YonasValentinMougaardKristensen.git-branch-manager-pro';
     vscode.env.openExternal(vscode.Uri.parse(`https://marketplace.visualstudio.com/items?itemName=${extensionId}&ssr=false#review-details`));
-    context.globalState.update('hasReviewed', true);
+    await context.globalState.update('hasReviewed', true);
   } else if (result === "Don't Ask Again") {
-    context.globalState.update('hasReviewed', true);
+    await context.globalState.update('hasReviewed', true);
   } else {
-    context.globalState.update('reviewRequestCount', reviewRequestCount + 1);
+    await context.globalState.update('reviewRequestCount', reviewRequestCount + 1);
   }
 
-  context.globalState.update('lastReviewRequestDate', Date.now());
+  await context.globalState.update('lastReviewRequestDate', Date.now());
 }
 
 /**

@@ -38,13 +38,13 @@ export async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
 
     try {
       const refOutput = await gitCommand(
-        ['for-each-ref', '--format=%(refname:short)|%(committerdate:unix)|%(authorname)|%(upstream:track)', 'refs/heads/'],
+        ['for-each-ref', '--format=%(refname:short)%00%(committerdate:unix)%00%(authorname)%00%(upstream:track)', 'refs/heads/'],
         cwd
       );
 
       for (const line of refOutput.split('\n')) {
         if (!line) continue;
-        const parts = line.split('|');
+        const parts = line.split('\0');
         if (parts.length >= 4) {
           branchDataMap.set(parts[0], {
             timestamp: parseInt(parts[1]) || 0,
@@ -194,13 +194,13 @@ export async function getRemoteBranchInfo(cwd: string): Promise<RemoteBranchInfo
 
     try {
       const refOutput = await gitCommand(
-        ['for-each-ref', '--format=%(refname:short)|%(committerdate:unix)', 'refs/remotes/'],
+        ['for-each-ref', '--format=%(refname:short)%00%(committerdate:unix)', 'refs/remotes/'],
         cwd
       );
 
       for (const line of refOutput.split('\n')) {
         if (!line) continue;
-        const [refName, ts] = line.split('|');
+        const [refName, ts] = line.split('\0');
         if (refName) remoteDataMap.set(refName, parseInt(ts) || 0);
       }
     } catch (err) {
@@ -329,7 +329,7 @@ export async function compareBranches(cwd: string, branchA: string, branchB: str
     // Get merge base
     try {
       const mergeBase = await gitCommand(
-        ['merge-base', branchA, branchB],
+        ['merge-base', '--', branchA, branchB],
         cwd
       );
       result.mergeBase = mergeBase.substring(0, 7);
@@ -339,11 +339,11 @@ export async function compareBranches(cwd: string, branchA: string, branchB: str
     if (result.ahead > 0) {
       const { stdout: commitsA } = await execFile(
         'git',
-        ['log', `${branchB}..${branchA}`, '--pretty=format:%h|%s|%an|%cr', '--reverse'],
+        ['log', `${branchB}..${branchA}`, '--pretty=format:%h%x00%s%x00%an%x00%cr', '--reverse'],
         { cwd, maxBuffer: 1024 * 1024 }
       );
       result.commitsA = commitsA.trim().split('\n').filter((l: string) => l).map((line: string) => {
-        const [hash, message, author, date] = line.split('|');
+        const [hash, message, author, date] = line.split('\0');
         return { hash, message, author, date, daysOld: 0 };
       });
     }
@@ -352,11 +352,11 @@ export async function compareBranches(cwd: string, branchA: string, branchB: str
     if (result.behind > 0) {
       const { stdout: commitsB } = await execFile(
         'git',
-        ['log', `${branchA}..${branchB}`, '--pretty=format:%h|%s|%an|%cr', '--reverse'],
+        ['log', `${branchA}..${branchB}`, '--pretty=format:%h%x00%s%x00%an%x00%cr', '--reverse'],
         { cwd, maxBuffer: 1024 * 1024 }
       );
       result.commitsB = commitsB.trim().split('\n').filter((l: string) => l).map((line: string) => {
-        const [hash, message, author, date] = line.split('|');
+        const [hash, message, author, date] = line.split('\0');
         return { hash, message, author, date, daysOld: 0 };
       });
     }
@@ -390,11 +390,11 @@ export async function getBranchTimeline(cwd: string, branchName: string, limit: 
   try {
     const { stdout } = await execFile(
       'git',
-      ['log', branchName, `--max-count=${limit}`, '--pretty=format:%h|%s|%an|%cr'],
+      ['log', branchName, `--max-count=${limit}`, '--pretty=format:%h%x00%s%x00%an%x00%cr'],
       { cwd, maxBuffer: 1024 * 1024 }
     );
     return stdout.trim().split('\n').filter((l: string) => l).map((line: string) => {
-      const [hash, message, author, date] = line.split('|');
+      const [hash, message, author, date] = line.split('\0');
       return { hash, message, author, date, daysOld: 0 };
     });
   } catch {
@@ -433,7 +433,7 @@ export async function restoreBranch(
     await gitCommand(['cat-file', '-t', commitHash], cwd);
 
     // Create branch at the commit
-    await gitCommand(['branch', branchName, commitHash], cwd);
+    await gitCommand(['branch', '--', branchName, commitHash], cwd);
     return { success: true };
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);

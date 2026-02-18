@@ -9,14 +9,14 @@ export async function getStashInfo(cwd: string): Promise<StashInfo[]> {
   const stashes: StashInfo[] = [];
 
   try {
-    const stdout = await gitCommand(['stash', 'list', '--format=%gd|%s|%ci'], cwd);
+    const stdout = await gitCommand(['stash', 'list', '--format=%gd%x00%s%x00%ci'], cwd);
     if (!stdout) return [];
 
     const lines = stdout.split('\n');
     const entries: { index: number; message: string; branch: string; date: Date; daysOld: number }[] = [];
 
     for (const line of lines) {
-      const parts = line.split('|');
+      const parts = line.split('\0');
       if (parts.length < 3) continue;
 
       const refMatch = parts[0].match(/stash@\{(\d+)\}/);

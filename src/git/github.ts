@@ -36,7 +36,7 @@ export async function fetchGitHubPRs(
   return new Promise((resolve) => {
     const options: https.RequestOptions = {
       hostname: 'api.github.com',
-      path: `/repos/${owner}/${repo}/pulls?state=all&per_page=100`,
+      path: `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=all&per_page=100`,
       method: 'GET',
       headers: {
         'Accept': 'application/vnd.github.v3+json',
@@ -47,7 +47,11 @@ export async function fetchGitHubPRs(
 
     const req = https.request(options, (res) => {
       let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+      const MAX_BODY = 5 * 1024 * 1024; // 5 MB cap
+      res.on('data', (chunk) => {
+        if (data.length + chunk.length > MAX_BODY) { res.destroy(); resolve(result); return; }
+        data += chunk;
+      });
       res.on('end', () => {
         try {
           if (res.statusCode !== 200) {
@@ -74,6 +78,7 @@ export async function fetchGitHubPRs(
     });
 
     req.on('error', () => { resolve(result); });
+    req.setTimeout(10000, () => { req.destroy(); resolve(result); });
     req.end();
   });
 }

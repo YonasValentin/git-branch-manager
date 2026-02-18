@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getCurrentBranch, getBranchInfo, getWorktreeInfo, gitCommand } from '../git';
+import { getBranchInfo, getWorktreeInfo, gitCommand } from '../git';
 import { formatAge } from '../utils';
 import { RepositoryContextManager } from '../services';
 
@@ -16,7 +16,6 @@ export async function createWorktreeFromBranch(repoContext: RepositoryContextMan
   const gitRoot = repo.path;
 
   const branches = await getBranchInfo(gitRoot);
-  const currentBranch = await getCurrentBranch(gitRoot);
 
   const items = branches
     .filter((b) => !b.isCurrentBranch)
@@ -53,8 +52,9 @@ export async function createWorktreeFromBranch(repoContext: RepositoryContextMan
       const fullPath = worktreePath.startsWith('/') ? worktreePath : `${gitRoot}/${worktreePath}`;
       vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(fullPath), true);
     }
-  } catch (error: any) {
-    vscode.window.showErrorMessage(`Failed to create worktree: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    vscode.window.showErrorMessage(`Failed to create worktree: ${errorMessage}`);
   }
 }
 
@@ -136,7 +136,8 @@ export async function showWorktreeManager(repoContext: RepositoryContextManager,
         vscode.window.showInformationMessage(`Worktree ${lockCmd}ed`);
         break;
     }
-  } catch (error: any) {
-    vscode.window.showErrorMessage(`Operation failed: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    vscode.window.showErrorMessage(`Operation failed: ${errorMessage}`);
   }
 }

@@ -64,8 +64,9 @@ export async function getBaseBranch(cwd: string): Promise<string> {
     // Fallback: check local branches
     try {
       const local = await gitCommand(['branch', '--format=%(refname:short)'], cwd);
-      if (local.includes('main')) return 'main';
-      if (local.includes('master')) return 'master';
+      const localBranches = local.split('\n').map(b => b.trim()).filter(Boolean);
+      if (localBranches.includes('main')) return 'main';
+      if (localBranches.includes('master')) return 'master';
     } catch {
       // No local branches available
     }

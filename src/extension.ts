@@ -431,6 +431,7 @@ async function showBranchManager(
   const panel = vscode.window.createWebviewPanel('branchManager', 'Git Branch Manager', vscode.ViewColumn.One, {
     enableScripts: true,
     retainContextWhenHidden: true,
+    localResourceRoots: [],
   });
 
   // Clean up when the panel is disposed (closed by user)
@@ -955,7 +956,7 @@ function getWebviewContent(
 
     const prInfo =
       branch.prStatus
-        ? `<a href="${branch.prStatus.url}" class="pr-link" title="${escapeHtml(branch.prStatus.title)}">#${branch.prStatus.number} (${branch.prStatus.state})</a>`
+        ? `<a href="${escapeHtml(branch.prStatus.url)}" class="pr-link" title="${escapeHtml(branch.prStatus.title)}">#${branch.prStatus.number} (${escapeHtml(branch.prStatus.state)})</a>`
         : '';
 
     const remoteInfo = branch.hasRemote ? (branch.remoteGone ? '<span class="remote-gone">🔴 Gone</span>' : '🌐') : '';
@@ -975,7 +976,7 @@ function getWebviewContent(
         <td><span class="health-indicator" style="background-color: ${healthColor};" title="${escapeHtml(branch.healthReason || '')}"></span></td>
         <td>${formatAge(branch.daysOld)}</td>
         <td>${branch.isMerged ? '✓' : ''}</td>
-        <td>${branch.author || ''}</td>
+        <td>${escapeHtml(branch.author || '')}</td>
         <td>${remoteInfo} ${prInfo} ${aheadBehindInfo}</td>
         <td>
           <button class="action-btn" data-action="deleteBranch" data-branch="${escapeHtml(branch.name)}" ${branch.isCurrentBranch ? 'disabled' : ''}>Delete</button>
@@ -994,7 +995,7 @@ function getWebviewContent(
         <td>${branch.daysOld ? formatAge(branch.daysOld) : 'Unknown'}</td>
         <td>${branch.isMerged ? '✓' : ''}</td>
         <td>${branch.isGone ? '🔴 Gone' : ''}</td>
-        <td>${branch.localBranch || ''}</td>
+        <td>${escapeHtml(branch.localBranch || '')}</td>
         <td>
           <button class="action-btn" data-action="deleteRemoteBranch" data-remote="${escapeHtml(branch.remote)}" data-branch="${escapeHtml(branch.name)}">Delete</button>
         </td>
@@ -1045,10 +1046,10 @@ function getWebviewContent(
           <div class="branch-name">${escapeHtml(entry.branchName)}</div>
         </td>
         <td>${timeAgo}</td>
-        <td><code>${entry.commitHash.substring(0, 7)}</code></td>
+        <td><code>${escapeHtml(entry.commitHash.substring(0, 7))}</code></td>
         <td>
-          <button class="action-btn" data-action="restoreBranch" data-branch="${escapeHtml(entry.branchName)}" data-hash="${entry.commitHash}">Restore</button>
-          <button class="action-btn" data-action="dismissRecoveryEntry" data-branch="${escapeHtml(entry.branchName)}" data-hash="${entry.commitHash}">Dismiss</button>
+          <button class="action-btn" data-action="restoreBranch" data-branch="${escapeHtml(entry.branchName)}" data-hash="${escapeHtml(entry.commitHash)}">Restore</button>
+          <button class="action-btn" data-action="dismissRecoveryEntry" data-branch="${escapeHtml(entry.branchName)}" data-hash="${escapeHtml(entry.commitHash)}">Dismiss</button>
         </td>
       </tr>
     `;
@@ -1072,7 +1073,7 @@ function getWebviewContent(
   const recoveryRows = recoveryLog.map(renderRecoveryRow).join('');
 
   const cleanupRulesArray = Object.entries(cleanupRules).map(([_id, rule]) => rule);
-  const rulesJson = JSON.stringify(cleanupRulesArray);
+  const rulesJson = JSON.stringify(cleanupRulesArray).replace(/</g, '\\u003c');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -2326,8 +2327,8 @@ function getWebviewContent(
     renderRules();
 
     // Load branch names for compare dropdowns
-    const allBranchNames = ${JSON.stringify(allBranchNames)};
-    const currentBranchName = ${JSON.stringify(currentBranch ?? '')};
+    const allBranchNames = ${JSON.stringify(allBranchNames).replace(/</g, '\\u003c')};
+    const currentBranchName = ${JSON.stringify(currentBranch ?? '').replace(/</g, '\\u003c')};
     initCompareDropdowns();
 
     function initCompareDropdowns() {
@@ -2500,3 +2501,9 @@ async function showSupportMessage(context: vscode.ExtensionContext) {
 
   context.globalState.update('lastSupportMessageDate', Date.now());
 }
+
+/**
+ * Deactivates the extension.
+ * Cleanup is handled automatically via context.subscriptions.
+ */
+export function deactivate() {}

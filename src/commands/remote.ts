@@ -61,7 +61,7 @@ export async function cleanRemoteBranches(repoContext: RepositoryContextManager,
       { canPickMany: true, placeHolder: 'Select remote branches to delete' }
     );
     if (selected) {
-      toDelete = selected.map((s) => (s as any).branch);
+      toDelete = selected.map((s) => (s as { branch: RemoteBranchInfo }).branch);
     }
   }
 

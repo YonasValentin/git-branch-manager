@@ -34,7 +34,11 @@ export async function fetchGitLabMRs(
 
     const req = https.request(options, (res) => {
       let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+      const MAX_BODY = 5 * 1024 * 1024; // 5 MB cap
+      res.on('data', (chunk) => {
+        if (data.length + chunk.length > MAX_BODY) { res.destroy(); resolve(result); return; }
+        data += chunk;
+      });
       res.on('end', () => {
         try {
           if (res.statusCode !== 200) {
@@ -71,6 +75,7 @@ export async function fetchGitLabMRs(
     });
 
     req.on('error', () => { resolve(result); });
+    req.setTimeout(10000, () => { req.destroy(); resolve(result); });
     req.end();
   });
 }

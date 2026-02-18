@@ -15,7 +15,6 @@ esbuild.js
 **/*.test.ts
 **/*.test.js
 .github/**
-CHANGELOG.md
 .vscodeignore
 .claude/**
 .planning/**

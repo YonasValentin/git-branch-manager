@@ -27,7 +27,7 @@ export async function fetchAzurePRs(
     const auth = Buffer.from(`:${pat}`).toString('base64');
     const options: https.RequestOptions = {
       hostname: 'dev.azure.com',
-      path: `/${organization}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repo)}/pullrequests?searchCriteria.status=all&$top=100&api-version=7.1`,
+      path: `/${encodeURIComponent(organization)}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repo)}/pullrequests?searchCriteria.status=all&$top=100&api-version=7.1`,
       method: 'GET',
       headers: {
         'Accept': 'application/json',
@@ -38,7 +38,11 @@ export async function fetchAzurePRs(
 
     const req = https.request(options, (res) => {
       let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+      const MAX_BODY = 5 * 1024 * 1024; // 5 MB cap
+      res.on('data', (chunk) => {
+        if (data.length + chunk.length > MAX_BODY) { res.destroy(); resolve(result); return; }
+        data += chunk;
+      });
       res.on('end', () => {
         try {
           if (res.statusCode !== 200) {
@@ -62,7 +66,7 @@ export async function fetchAzurePRs(
                 // abandoned
                 state = 'closed';
               }
-              const webUrl = `https://dev.azure.com/${organization}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`;
+              const webUrl = `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repo)}/pullrequest/${pr.pullRequestId}`;
               result.set(branchName, {
                 number: pr.pullRequestId,
                 state,
@@ -79,6 +83,7 @@ export async function fetchAzurePRs(
     });
 
     req.on('error', () => { resolve(result); });
+    req.setTimeout(10000, () => { req.destroy(); resolve(result); });
     req.end();
   });
 }
