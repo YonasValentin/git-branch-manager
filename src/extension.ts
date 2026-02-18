@@ -20,6 +20,7 @@ import { getNonce, formatAge, escapeHtml, validateRegexPattern } from './utils';
 
 // Git operations
 import {
+  gitCommand,
   getCurrentBranch,
   getBaseBranch,
   getBranchInfo,
@@ -580,7 +581,7 @@ async function showBranchManager(
 
         case 'switch':
           try {
-            await switchBranch(gitRoot, message.branch);
+            await gitCommand(['checkout', message.branch], gitRoot);
             vscode.window.showInformationMessage(`Switched to branch: ${message.branch}`);
             await updateWebview();
             await updateGlobalStatusBar();
@@ -780,6 +781,18 @@ async function showBranchManager(
             await updateWebview();
           }
           break;
+
+        case 'promptBranchNote': {
+          const noteText = await vscode.window.showInputBox({
+            prompt: `Add note for ${message.branch}`,
+            placeHolder: 'Enter a note for this branch',
+          });
+          if (noteText !== undefined) {
+            await saveBranchNote(context, gitRoot, message.branch, noteText);
+            await updateWebview();
+          }
+          break;
+        }
 
         case 'saveBranchNote':
           await saveBranchNote(context, gitRoot, message.branch, message.note);
@@ -1809,10 +1822,7 @@ function getWebviewContent(
     }
 
     function addNote(branch) {
-      const note = prompt('Add note for ' + branch);
-      if (note !== null) {
-        vscode.postMessage({ command: 'saveBranchNote', branch, note });
-      }
+      vscode.postMessage({ command: 'promptBranchNote', branch });
     }
 
     function deleteSelected() {
