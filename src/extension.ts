@@ -35,6 +35,7 @@ import {
   dropStash,
   clearStashes,
   compareBranches,
+  getBranchTimeline,
   getAllBranchNames,
   renameBranch,
   deleteBranchForce,
@@ -393,13 +394,14 @@ async function showBranchManager(
     const daysUntilStale = config.get<number>('daysUntilStale', 30);
     const daysUntilOld = config.get<number>('daysUntilOld', 60);
 
-    const [branches, remoteBranches, worktrees, stashes, currentBranch, baseBranch] = await Promise.all([
+    const [branches, remoteBranches, worktrees, stashes, currentBranch, baseBranch, allBranchNames] = await Promise.all([
       getBranchInfo(gitRoot),
       getRemoteBranchInfo(gitRoot),
       getWorktreeInfo(gitRoot),
       getStashInfo(gitRoot),
       getCurrentBranch(gitRoot),
       getBaseBranch(gitRoot),
+      getAllBranchNames(gitRoot),
     ]);
 
     const branchNotesMap = getBranchNotes(context, gitRoot);
@@ -423,7 +425,8 @@ async function showBranchManager(
       currentBranch,
       baseBranch,
       {},
-      recoveryLog
+      recoveryLog,
+      allBranchNames
     );
   }
 
@@ -558,11 +561,18 @@ async function showBranchManager(
         case 'compareBranches':
           try {
             const comparison = await compareBranches(gitRoot, message.branch1, message.branch2);
-            vscode.window.showInformationMessage(
-              `${message.branch1} is ${comparison.ahead} ahead and ${comparison.behind} behind ${message.branch2}`
-            );
+            panel.webview.postMessage({ command: 'comparisonResult', data: comparison });
           } catch (error) {
             vscode.window.showErrorMessage(`Failed to compare branches: ${error}`);
+          }
+          break;
+
+        case 'getTimeline':
+          try {
+            const timeline = await getBranchTimeline(gitRoot, message.branchName, 5);
+            panel.webview.postMessage({ command: 'timelineResult', data: { branchName: message.branchName, commits: timeline } });
+          } catch {
+            // Silent failure — timeline is supplementary
           }
           break;
 
@@ -817,7 +827,8 @@ function getWebviewContent(
   currentBranch: string | null,
   _baseBranch: string,
   _githubPRs: Record<string, PRStatus>,
-  recoveryLog: DeletedBranchEntry[]
+  recoveryLog: DeletedBranchEntry[],
+  allBranchNames: string[] = []
 ): string {
   const nonce = getNonce();
 
@@ -1274,6 +1285,18 @@ function getWebviewContent(
     .batch-rename-form input {
       flex: 1;
     }
+
+    .comparison-section { margin: 12px 0; }
+    .comparison-section h3 { margin-bottom: 8px; }
+    .commit-row { padding: 4px 0; font-size: 12px; }
+    .commit-hash { font-family: monospace; opacity: 0.8; }
+    .file-change-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+    .status-badge { display: inline-block; width: 20px; text-align: center; font-weight: bold; font-size: 11px; border-radius: 3px; padding: 1px 4px; }
+    .status-a { background: var(--vscode-gitDecoration-addedResourceForeground, #2ea043); color: #fff; }
+    .status-m { background: var(--vscode-gitDecoration-modifiedResourceForeground, #d29922); color: #fff; }
+    .status-d { background: var(--vscode-gitDecoration-deletedResourceForeground, #f85149); color: #fff; }
+    .status-r { background: var(--vscode-gitDecoration-renamedResourceForeground, #58a6ff); color: #fff; }
+    .file-path { font-family: monospace; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -1311,6 +1334,7 @@ function getWebviewContent(
     <button class="tab" onclick="showTab('stashes')">Stashes</button>
     <button class="tab" onclick="showTab('recovery')">Recovery${recoveryLog.length > 0 ? ` (${recoveryLog.length})` : ''}</button>
     <button class="tab" onclick="showTab('tools')">Tools</button>
+    <button class="tab" onclick="showTab('compare')">Compare</button>
   </div>
 
   <div id="branches-tab" class="tab-content active">
@@ -1462,6 +1486,22 @@ function getWebviewContent(
     </table>
     `
     }
+  </div>
+
+  <div id="compare-tab" class="tab-content">
+    <div class="tool-card">
+      <h3>Compare Branches</h3>
+      <div class="filter-row" style="margin-bottom: 12px;">
+        <label style="width: 80px; font-size: 12px;">Branch A:</label>
+        <select id="compare-branch-a" style="flex: 1;"></select>
+      </div>
+      <div class="filter-row" style="margin-bottom: 12px;">
+        <label style="width: 80px; font-size: 12px;">Branch B:</label>
+        <select id="compare-branch-b" style="flex: 1;"></select>
+      </div>
+      <button class="btn" onclick="runCompare()">Compare</button>
+    </div>
+    <div id="comparison-results"></div>
   </div>
 
   <div id="tools-tab" class="tab-content">
@@ -2008,7 +2048,7 @@ function getWebviewContent(
           if (!pendingPreviewRuleId) break;
           const previewDiv = document.getElementById('preview-' + pendingPreviewRuleId);
           if (previewDiv) {
-            previewDiv.innerHTML = '';
+            while (previewDiv.firstChild) previewDiv.removeChild(previewDiv.firstChild);
             const matches = msg.matches;
             if (!matches || matches.length === 0) {
               const p = document.createElement('p');
@@ -2033,6 +2073,79 @@ function getWebviewContent(
           pendingPreviewRuleId = null;
           break;
         }
+
+        case 'comparisonResult': {
+          const resultsContainer = document.getElementById('comparison-results');
+          if (!resultsContainer) break;
+          while (resultsContainer.firstChild) resultsContainer.removeChild(resultsContainer.firstChild);
+
+          const data = msg.data;
+          if (!data) break;
+
+          // Ahead/behind summary
+          const summarySection = document.createElement('div');
+          summarySection.className = 'comparison-section';
+          const summaryH3 = document.createElement('h3');
+          summaryH3.textContent = data.branchA + ' vs ' + data.branchB;
+          summarySection.appendChild(summaryH3);
+          const summaryP = document.createElement('p');
+          summaryP.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 8px;';
+          summaryP.textContent = data.branchA + ' is ' + data.ahead + ' ahead and ' + data.behind + ' behind ' + data.branchB;
+          summarySection.appendChild(summaryP);
+          resultsContainer.appendChild(summarySection);
+
+          // Commits unique to branchA
+          if (data.commitsA && data.commitsA.length > 0) {
+            const sectionA = document.createElement('div');
+            sectionA.className = 'comparison-section';
+            const headA = document.createElement('h3');
+            headA.textContent = 'Commits unique to ' + data.branchA + ' (' + data.commitsA.length + ')';
+            sectionA.appendChild(headA);
+            renderCommits(data.commitsA, sectionA);
+            resultsContainer.appendChild(sectionA);
+          }
+
+          // Commits unique to branchB
+          if (data.commitsB && data.commitsB.length > 0) {
+            const sectionB = document.createElement('div');
+            sectionB.className = 'comparison-section';
+            const headB = document.createElement('h3');
+            headB.textContent = 'Commits unique to ' + data.branchB + ' (' + data.commitsB.length + ')';
+            sectionB.appendChild(headB);
+            renderCommits(data.commitsB, sectionB);
+            resultsContainer.appendChild(sectionB);
+          }
+
+          // Changed files
+          if (data.files && data.files.length > 0) {
+            const filesSection = document.createElement('div');
+            filesSection.className = 'comparison-section';
+            const filesH3 = document.createElement('h3');
+            filesH3.textContent = 'Changed files (' + data.files.length + ')';
+            filesSection.appendChild(filesH3);
+            renderFileChanges(data.files, filesSection);
+            resultsContainer.appendChild(filesSection);
+          }
+
+          if ((!data.commitsA || data.commitsA.length === 0) && (!data.commitsB || data.commitsB.length === 0) && (!data.files || data.files.length === 0)) {
+            const noDiffP = document.createElement('p');
+            noDiffP.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground);';
+            noDiffP.textContent = 'No differences found between the two branches.';
+            resultsContainer.appendChild(noDiffP);
+          }
+          break;
+        }
+
+        case 'timelineResult': {
+          const data = msg.data;
+          if (!data || !data.commits || data.commits.length === 0) break;
+          const safeId = 'timeline-' + String(data.branchName).replace(/[^a-zA-Z0-9]/g, '-');
+          const timelineContainer = document.getElementById(safeId);
+          if (!timelineContainer) break;
+          while (timelineContainer.firstChild) timelineContainer.removeChild(timelineContainer.firstChild);
+          renderCommits(data.commits, timelineContainer);
+          break;
+        }
       }
     });
 
@@ -2048,6 +2161,71 @@ function getWebviewContent(
     // Load cleanup rules
     const cleanupRules = ${rulesJson};
     renderRules();
+
+    // Load branch names for compare dropdowns
+    const allBranchNames = ${JSON.stringify(allBranchNames)};
+    const currentBranchName = ${JSON.stringify(currentBranch ?? '')};
+    initCompareDropdowns();
+
+    function initCompareDropdowns() {
+      const selectA = document.getElementById('compare-branch-a');
+      const selectB = document.getElementById('compare-branch-b');
+      if (!selectA || !selectB) return;
+
+      allBranchNames.forEach(function(name) {
+        const optA = document.createElement('option');
+        optA.textContent = name;
+        optA.value = name;
+        if (name === currentBranchName) optA.selected = true;
+        selectA.appendChild(optA);
+
+        const optB = document.createElement('option');
+        optB.textContent = name;
+        optB.value = name;
+        selectB.appendChild(optB);
+      });
+    }
+
+    function runCompare() {
+      const selectA = document.getElementById('compare-branch-a');
+      const selectB = document.getElementById('compare-branch-b');
+      if (!selectA || !selectB) return;
+      const branch1 = selectA.value;
+      const branch2 = selectB.value;
+      if (!branch1 || !branch2) return;
+      vscode.postMessage({ command: 'compareBranches', branch1, branch2 });
+    }
+
+    function renderCommits(commits, container) {
+      commits.forEach(function(c) {
+        const row = document.createElement('div');
+        row.className = 'commit-row';
+        const hashSpan = document.createElement('code');
+        hashSpan.className = 'commit-hash';
+        hashSpan.textContent = c.hash;
+        const textSpan = document.createElement('span');
+        textSpan.textContent = ' ' + c.message + ' \u2014 ' + c.author + ', ' + c.date;
+        row.appendChild(hashSpan);
+        row.appendChild(textSpan);
+        container.appendChild(row);
+      });
+    }
+
+    function renderFileChanges(files, container) {
+      files.forEach(function(f) {
+        const row = document.createElement('div');
+        row.className = 'file-change-row';
+        const badge = document.createElement('span');
+        badge.className = 'status-badge status-' + (f.status || '').toLowerCase();
+        badge.textContent = f.status || '?';
+        const pathSpan = document.createElement('span');
+        pathSpan.className = 'file-path';
+        pathSpan.textContent = f.path;
+        row.appendChild(badge);
+        row.appendChild(pathSpan);
+        container.appendChild(row);
+      });
+    }
   </script>
 </body>
 </html>`;
