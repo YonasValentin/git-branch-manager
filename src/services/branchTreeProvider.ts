@@ -226,13 +226,11 @@ export class BranchTreeProvider
    * Produces the four root StatusGroupItems from the active repository.
    */
   private async getRootNodes(): Promise<StatusGroupItem[]> {
-    const repos = this.repoContext.getRepositories();
-    if (repos.length === 0) {
+    // Use peekActiveRepository (sync, no QuickPick) so tree refreshes never block on user interaction
+    const repo = this.repoContext.peekActiveRepository();
+    if (!repo) {
       return [];
     }
-
-    // Single active repo model (Phase 8 design)
-    const repo = repos[0];
     const daysUntilStale: number = vscode.workspace
       .getConfiguration('gitBranchManager')
       .get('daysUntilStale', 30);

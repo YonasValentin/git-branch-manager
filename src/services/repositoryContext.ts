@@ -162,6 +162,24 @@ export class RepositoryContextManager {
   }
 
   /**
+   * Returns the active repository without triggering discovery or a QuickPick.
+   * Falls back to the first discovered repo only when no active repo is set.
+   * Returns undefined if the persisted active repo no longer exists.
+   * Safe to call on the hot path (tree provider, etc.).
+   * @returns Active repository or undefined if none discovered yet
+   */
+  peekActiveRepository(): GitRepository | undefined {
+    if (this.activeRepo && this.repositories.has(this.activeRepo)) {
+      return this.repositories.get(this.activeRepo);
+    }
+    if (this.activeRepo) {
+      return undefined;
+    }
+    const repos = Array.from(this.repositories.values());
+    return repos[0];
+  }
+
+  /**
    * Returns all discovered repositories.
    * @returns Array of GitRepository objects
    */
