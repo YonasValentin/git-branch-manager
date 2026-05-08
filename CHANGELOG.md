@@ -2,6 +2,49 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [2.3.0] - 2026-05-08
+
+### Changed
+- Rewrote webview as a React 18 SPA bundled via esbuild. The ~2700-line inline HTML generator is replaced with a typed React app: design tokens in `tokens.ts`, all UI primitives in `components.tsx`, separate view files for Local, Remote, Worktrees, Stashes, Compare, and Tools, plus a branch-detail Drawer and ⌘K command palette. Dark/light themes, consistent grid alignment.
+- `buildInitialData()` centralizes all extension-type → webview-type mapping. Extension entry point went from ~2700 to ~1280 lines.
+- Enabled `noUncheckedIndexedAccess` and `noFallthroughCasesInSwitch` in both tsconfigs. Fixed 58 latent bugs surfaced across git parsing, message handlers, and webview views.
+
+### Fixed
+- **XSS**: branch names containing `</script>` could break out of the inline data script tag. `JSON.stringify` doesn't escape `<`, `>`, `&`, U+2028, or U+2029 — re-added the escape pass from v2.0.3 that was lost in the rewrite.
+- **React dev bundle**: webview shipped React in development mode (1.2 MB). Added `process.env.NODE_ENV` define to esbuild — bundle is now 215 KB.
+- **PR badge updates**: `prStatusUpdate` posted raw `PRStatus` but the webview expects `PRInfo`. Now maps through `mapPR()` before posting.
+- **Branch notes**: `buildInitialData` hardcoded `note: null`. Notes now come from the `branchNotes` map.
+- **Webview message handler untyped**: `onDidReceiveMessage` was implicitly `any`. Added runtime validators (`reqStr`, `reqStrArray`, `reqNum`) that throw on missing or wrong-type fields instead of silently passing `undefined` to git.
+- **Disposed panel postMessage**: closing the panel while PR fetch was in flight threw "Webview is disposed". Added a `panelDisposed` flag and `safePost` wrapper.
+- **Undefined CSS variables**: `--critical`, `--pr`, `--bg-input`, `--bg-selected`, `--border-focus`, `--row-py` were referenced but never defined.
+- `window.INITIAL_DATA` missing fallback: app now renders empty state if the inline script fails.
+- Inbound message validation in `bridge.ts`: validates `command` is a string, wraps handlers in try/catch.
+- Removed `(message.branchName ?? message.branch)` fallbacks — one canonical field name per command.
+- **Flag injection**: added `isValidGitRef` / `requireValidRef` at all webview→extension trust boundaries. Refs starting with `-`, containing control chars, `..`, `@{`, `.lock`, or reserved git chars are rejected.
+- **`DiffContentProvider` injection**: branch/file came from URI query params. Added `isValidGitRef`/`isValidRepoPath` guards, `--` separator, and `CancellationToken` support.
+- **`GIT_TERMINAL_PROMPT=0` missing**: misconfigured HTTPS remotes could hang the extension on a credential prompt with no terminal to read from. Added via `buildGitEnv()`, which also strips inherited `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`/`GIT_CONFIG*`.
+- **`gitCommand` stderr**: now surfaces git's actual error message via `GitCommandError` instead of Node's "Command failed" wrapper.
+- **Stale GitHub auth**: module-level session was never refreshed after revoke. Replaced with on-demand `getGitHubAccessToken()`. Added `onDidChangeSessions` listener.
+- **GitHub API headers**: switched from deprecated `Authorization: token` to `Bearer`, added `X-GitHub-Api-Version: 2022-11-28`.
+- **Pagination**: GitHub/GitLab (Link header) and Azure DevOps (`$skip`) now fetch up to 10 pages. Repos with >100 PRs were silently missing results.
+- **API errors swallowed**: HTTP 4xx/5xx now reject with descriptive errors. Added `res.on('error')` to all three platform clients.
+- **File watchers not recreated**: repos added after activation lost auto-refresh. Refactored to `watchRepo()`/`unwatchRepo()` with `onDidChangeWorkspaceFolders`.
+- **`onDidChangeConfiguration` missing**: `gitBranchManager.*` setting changes now refresh the tree.
+- **`openPR` context menu**: was `branch` only — couldn't open PR for the current branch. Now also matches `currentBranch`.
+- **Duplicate Cancel in delete modal**: modals auto-render Cancel; adding it as a custom action created two. Removed.
+- **`switchBranch` confirmation**: was a non-modal QuickPick (easy to dismiss accidentally). Moved to modal warning.
+- **Rename loop notifications**: posted one error per failure. Rolled up to a single notification.
+- **`goneDetector` label parsing**: was regex-stripping the icon prefix from the label to recover the branch name. Now stores `branch: BranchInfo` directly on each `QuickPickItem`.
+- Remote delete progress (`git push --delete`) now cancellable.
+
+### Removed
+- Dead `ACCENTS` map (theme picker was never wired).
+- Duplicate `declare global { interface Window }` in `app.tsx`.
+
+### Manifest
+- Added `category: "Git Branch Manager"` to all 18 commands.
+- Added `items: { type: 'string' }` to `gitBranchManager.protectedBranches` schema.
+
 ## [2.0.3] - 2026-02-18
 
 ### Fixed

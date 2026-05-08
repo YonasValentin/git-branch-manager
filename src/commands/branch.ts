@@ -3,6 +3,7 @@ import { getBranchInfo, gitCommand, getCommitHash, restoreBranch } from '../git'
 import { addRecoveryEntry, getRecoveryLog, removeRecoveryEntry } from '../storage';
 import { BRANCH_TEMPLATES } from '../constants';
 import { RepositoryContextManager } from '../services';
+import { requireValidRef } from '../internals/validateRef';
 
 /**
  * Creates a branch from a template.
@@ -57,7 +58,7 @@ export async function createBranchFromTemplate(repoContext: RepositoryContextMan
     .replace('{version}', description);
 
   try {
-    await gitCommand(['checkout', '-b', branchName], gitRoot);
+    await gitCommand(['checkout', '-b', requireValidRef(branchName, 'branchName')], gitRoot);
     vscode.window.showInformationMessage(`Created branch: ${branchName}`);
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -120,14 +121,17 @@ export async function quickCleanup(
  * @param branchName - Branch to switch to
  */
 export async function switchBranch(cwd: string, branchName: string): Promise<void> {
-  const result = await vscode.window.showQuickPick(['Yes', 'No'], {
-    placeHolder: `Switch to branch "${branchName}"?`,
-  });
-
-  if (result !== 'Yes') return;
+  // Modal warning is the recommended pattern for destructive/state-changing
+  // confirmations — QuickPick doesn't block focus and is too easy to dismiss.
+  const result = await vscode.window.showWarningMessage(
+    `Switch to branch "${branchName}"?`,
+    { modal: true },
+    'Switch',
+  );
+  if (result !== 'Switch') return;
 
   try {
-    await gitCommand(['checkout', branchName], cwd);
+    await gitCommand(['checkout', requireValidRef(branchName, 'branchName')], cwd);
     vscode.window.showInformationMessage(`Switched to branch: ${branchName}`);
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -147,11 +151,11 @@ export async function deleteBranch(cwd: string, branchName: string, context?: vs
   const confirmBeforeDelete = config.get<boolean>('confirmBeforeDelete', true);
 
   if (confirmBeforeDelete) {
+    // Modal dialogs auto-render a Cancel button; passing 'Cancel' would dupe it.
     const result = await vscode.window.showWarningMessage(
       `Delete branch "${branchName}"?`,
       { modal: true },
       'Delete',
-      'Cancel'
     );
     if (result !== 'Delete') return false;
   }
@@ -227,28 +231,33 @@ export async function deleteMultipleBranches(cwd: string, branches: string[], co
           console.warn('Batch delete failed:', errMessage);
 
           for (let i = 0; i < branches.length; i++) {
-            progress.report({ increment: 50 / branches.length, message: branches[i] });
+            const branchName = branches[i];
+            if (!branchName) continue;
+            progress.report({ increment: 50 / branches.length, message: branchName });
             try {
-              await gitCommand(['branch', '-D', '--', branches[i]], cwd);
+              await gitCommand(['branch', '-D', '--', branchName], cwd);
               deleted++;
-              deletedBranches.push(branches[i]);
+              deletedBranches.push(branchName);
             } catch {
               failed++;
-              failedBranches.push(branches[i]);
+              failedBranches.push(branchName);
             }
           }
         }
       } else {
-        progress.report({ increment: 50, message: branches[0] });
-        try {
-          await gitCommand(['branch', '-D', '--', branches[0]], cwd);
-          deleted = 1;
-          deletedBranches.push(branches[0]);
-        } catch {
-          failed = 1;
-          failedBranches.push(branches[0]);
+        const firstBranch = branches[0];
+        if (firstBranch) {
+          progress.report({ increment: 50, message: firstBranch });
+          try {
+            await gitCommand(['branch', '-D', '--', firstBranch], cwd);
+            deleted = 1;
+            deletedBranches.push(firstBranch);
+          } catch {
+            failed = 1;
+            failedBranches.push(firstBranch);
+          }
+          progress.report({ increment: 50, message: 'Done' });
         }
-        progress.report({ increment: 50, message: 'Done' });
       }
 
       // Store recovery entries for successfully deleted branches
@@ -407,12 +416,11 @@ export async function undoLastDelete(
 ): Promise<void> {
   const log = getRecoveryLog(context, cwd);
 
-  if (log.length === 0) {
+  const lastEntry = log[0]; // Newest entry is first
+  if (!lastEntry) {
     vscode.window.showInformationMessage('No deleted branches to restore.');
     return;
   }
-
-  const lastEntry = log[0]; // Newest entry is first
   const timeAgo = getTimeAgo(lastEntry.deletedAt);
 
   const result = await vscode.window.showInformationMessage(

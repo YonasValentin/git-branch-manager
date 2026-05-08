@@ -99,7 +99,7 @@ export class RepositoryContextManager {
       return undefined;
     }
 
-    if (repos.length === 1) {
+    if (repos.length === 1 && repos[0]) {
       return repos[0].path;
     }
 

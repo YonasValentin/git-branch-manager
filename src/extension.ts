@@ -7,16 +7,24 @@ import {
   RemoteBranchInfo,
   WorktreeInfo,
   StashInfo,
-  BranchNote,
   CleanupRule,
   DeletedBranchEntry,
+  CommitInfo,
+  FileChange,
+  BranchNote,
 } from './types';
 
 // Services
 import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem, GoneDetector, AutoCleanupEvaluator, DiffContentProvider, GIT_DIFF_SCHEME } from './services';
 
 // Utilities
-import { getNonce, formatAge, escapeHtml, validateRegexPattern } from './utils';
+import { getNonce, formatAge, validateRegexPattern } from './utils';
+import { escapeForScriptTag } from './internals/escapeForScriptTag';
+import { reqStr, reqStrArray, reqNum, isCleanupRuleArray } from './internals/messageValidators';
+import { mapPR } from './internals/mapPR';
+import { buildInitialData } from './internals/buildInitialData';
+import { createSafePost } from './internals/safePost';
+import { requireValidRef } from './internals/validateRef';
 
 // Git operations
 import {
@@ -69,12 +77,20 @@ import {
   restoreFromLog,
 } from './commands';
 
-let gitHubSession: vscode.AuthenticationSession | undefined;
-
 /**
- * Activates the extension.
- * @param context - Extension context for subscriptions and state
+ * Looks up the current GitHub authentication session on demand. Avoids the
+ * stale-cache pitfall where a module-level `let session` survives a
+ * user-initiated revoke/sign-out.
  */
+async function getGitHubAccessToken(silent = true): Promise<string | undefined> {
+  try {
+    const session = await vscode.authentication.getSession('github', ['repo'], silent ? { silent: true } : { createIfNone: true });
+    return session?.accessToken;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   void incrementUsageCount(context);
 
@@ -85,6 +101,26 @@ export async function activate(context: vscode.ExtensionContext) {
   // PAT secret storage keys
   const GITLAB_TOKEN_KEY = 'gitBranchManager.gitlabToken';
   const AZURE_TOKEN_KEY = 'gitBranchManager.azureToken';
+
+  // Re-fetch PR data when the user's GitHub auth session changes (sign-in, sign-out, token rotation).
+  context.subscriptions.push(
+    vscode.authentication.onDidChangeSessions((e) => {
+      if (e.provider.id === 'github') {
+        // Active panel will pick up the new token on its next refresh; tree view too.
+        // No need to push state imperatively — VS Code's lazy refresh model handles it.
+      }
+    })
+  );
+
+  // Refresh views when our settings change (e.g., daysUntilStale moves a branch
+  // from active → stale; protectedBranches changes the cleanup target set).
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('gitBranchManager')) {
+        branchTreeProvider.scheduleRefresh();
+      }
+    })
+  );
 
   // Register DiffContentProvider for virtual diff documents (COMP-03)
   const diffProvider = new DiffContentProvider();
@@ -113,27 +149,9 @@ export async function activate(context: vscode.ExtensionContext) {
   });
   context.subscriptions.push(branchTreeView, branchTreeProvider);
 
-  // File watchers for auto-refresh (TREE-05)
-  for (const repo of repoContext.getRepositories()) {
-    const refsPattern = new vscode.RelativePattern(repo.path, '.git/refs/heads/**');
-    const headPattern = new vscode.RelativePattern(repo.path, '.git/HEAD');
-    const packedPattern = new vscode.RelativePattern(repo.path, '.git/packed-refs');
-
-    const refsWatcher = vscode.workspace.createFileSystemWatcher(refsPattern);
-    const headWatcher = vscode.workspace.createFileSystemWatcher(headPattern);
-    const packedWatcher = vscode.workspace.createFileSystemWatcher(packedPattern);
-
-    const scheduleRefresh = () => branchTreeProvider.scheduleRefresh();
-
-    context.subscriptions.push(
-      refsWatcher.onDidCreate(scheduleRefresh),
-      refsWatcher.onDidDelete(scheduleRefresh),
-      refsWatcher.onDidChange(scheduleRefresh),
-      headWatcher.onDidChange(scheduleRefresh),
-      packedWatcher.onDidChange(scheduleRefresh),
-      refsWatcher, headWatcher, packedWatcher
-    );
-  }
+  // File watchers for auto-refresh (TREE-05).
+  // Tracked per-repo so we can re-create them when workspace folders change.
+  const repoWatcherDisposables = new Map<string, vscode.Disposable[]>();
 
   // Gone branch auto-detection (GONE-01, GONE-02, GONE-03, GONE-04)
   const goneDetector = new GoneDetector(repoContext, branchTreeProvider, context);
@@ -144,33 +162,58 @@ export async function activate(context: vscode.ExtensionContext) {
   const autoCleanupEvaluator = new AutoCleanupEvaluator(repoContext, branchTreeProvider, context);
   context.subscriptions.push(autoCleanupEvaluator);
 
-  for (const repo of repoContext.getRepositories()) {
-    const fetchHeadPattern = new vscode.RelativePattern(repo.path, '.git/FETCH_HEAD');
-    const fetchHeadWatcher = vscode.workspace.createFileSystemWatcher(fetchHeadPattern);
+  function watchRepo(repoPath: string) {
+    if (repoWatcherDisposables.has(repoPath)) return; // already watching
 
-    context.subscriptions.push(
-      fetchHeadWatcher.onDidChange(() => {
-        goneDetector.onFetchCompleted(repo.path);
-        autoCleanupEvaluator.onEventTriggered(repo.path);
-      }),
-      fetchHeadWatcher.onDidCreate(() => {
-        goneDetector.onFetchCompleted(repo.path);
-        autoCleanupEvaluator.onEventTriggered(repo.path);
-      }),
-      fetchHeadWatcher
-    );
+    const refsWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(repoPath, '.git/refs/heads/**'));
+    const headWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(repoPath, '.git/HEAD'));
+    const packedWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(repoPath, '.git/packed-refs'));
+    const fetchHeadWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(repoPath, '.git/FETCH_HEAD'));
+    const origHeadWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(repoPath, '.git/ORIG_HEAD'));
+
+    const scheduleRefresh = () => branchTreeProvider.scheduleRefresh();
+    const onFetchOrCleanup = () => {
+      goneDetector.onFetchCompleted(repoPath);
+      autoCleanupEvaluator.onEventTriggered(repoPath);
+    };
+
+    const disposables: vscode.Disposable[] = [
+      refsWatcher.onDidCreate(scheduleRefresh),
+      refsWatcher.onDidDelete(scheduleRefresh),
+      refsWatcher.onDidChange(scheduleRefresh),
+      headWatcher.onDidChange(scheduleRefresh),
+      packedWatcher.onDidChange(scheduleRefresh),
+      fetchHeadWatcher.onDidChange(onFetchOrCleanup),
+      fetchHeadWatcher.onDidCreate(onFetchOrCleanup),
+      origHeadWatcher.onDidCreate(() => autoCleanupEvaluator.onEventTriggered(repoPath)),
+      refsWatcher, headWatcher, packedWatcher, fetchHeadWatcher, origHeadWatcher,
+    ];
+    repoWatcherDisposables.set(repoPath, disposables);
+    for (const d of disposables) context.subscriptions.push(d);
   }
 
-  // ORIG_HEAD watcher for merge events (AUTO-01)
-  for (const repo of repoContext.getRepositories()) {
-    const origHeadPattern = new vscode.RelativePattern(repo.path, '.git/ORIG_HEAD');
-    const origHeadWatcher = vscode.workspace.createFileSystemWatcher(origHeadPattern);
-
-    context.subscriptions.push(
-      origHeadWatcher.onDidCreate(() => autoCleanupEvaluator.onEventTriggered(repo.path)),
-      origHeadWatcher
-    );
+  function unwatchRepo(repoPath: string) {
+    const disposables = repoWatcherDisposables.get(repoPath);
+    if (!disposables) return;
+    for (const d of disposables) d.dispose();
+    repoWatcherDisposables.delete(repoPath);
   }
+
+  // Initial watcher setup for each known repo
+  for (const repo of repoContext.getRepositories()) watchRepo(repo.path);
+
+  // Re-sync watchers when workspace folders change (repos added/removed)
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+      await repoContext.discoverRepositories();
+      const current = new Set(repoContext.getRepositories().map((r) => r.path));
+      for (const path of repoWatcherDisposables.keys()) {
+        if (!current.has(path)) unwatchRepo(path);
+      }
+      for (const repo of repoContext.getRepositories()) watchRepo(repo.path);
+      branchTreeProvider.scheduleRefresh();
+    })
+  );
 
   // cleanGoneBranches command (GONE-04) — programmatic trigger for manual gone-branch scan
   context.subscriptions.push(
@@ -247,8 +290,8 @@ export async function activate(context: vscode.ExtensionContext) {
       const platformInfo = await detectPlatform(repo.path);
 
       if (platformInfo.platform === 'github') {
-        gitHubSession = await vscode.authentication.getSession('github', ['repo'], { createIfNone: true });
-        if (gitHubSession) { vscode.window.showInformationMessage('Connected to GitHub'); }
+        const token = await getGitHubAccessToken(/* silent */ false);
+        if (token) { vscode.window.showInformationMessage('Connected to GitHub'); }
       } else if (platformInfo.platform === 'gitlab') {
         const token = await vscode.window.showInputBox({
           title: 'GitLab Personal Access Token',
@@ -432,17 +475,22 @@ async function showBranchManager(
   const panel = vscode.window.createWebviewPanel('branchManager', 'Git Branch Manager', vscode.ViewColumn.One, {
     enableScripts: true,
     retainContextWhenHidden: true,
-    localResourceRoots: [],
+    localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'dist')],
   });
 
-  // Clean up when the panel is disposed (closed by user)
-  panel.onDidDispose(() => {}, undefined, context.subscriptions);
+  // Track disposal so async tasks (PR fetch, comparisons) don't postMessage after close.
+  const disposalState = { disposed: false };
+  panel.onDidDispose(() => { disposalState.disposed = true; }, undefined, context.subscriptions);
+  const safePost = createSafePost(
+    (msg) => { void panel.webview.postMessage(msg); },
+    disposalState,
+  );
 
   async function updateWebview() {
     const repo = await repoContext.getActiveRepository();
     if (!repo) {
       panel.title = 'Git Branch Manager';
-      panel.webview.html = getWebviewContent(panel.webview, [], [], [], [], {}, {}, 30, 60, null, '', {}, []);
+      panel.webview.html = getWebviewContent(panel.webview, context.extensionUri, buildInitialData([], [], [], [], [], [], new Map(), '', 'main', '', 30));
       return;
     }
     panel.title = `Git Branch Manager: ${repo.name}`;
@@ -450,46 +498,25 @@ async function showBranchManager(
 
     const config = vscode.workspace.getConfiguration('gitBranchManager');
     const daysUntilStale = config.get<number>('daysUntilStale', 30);
-    const daysUntilOld = config.get<number>('daysUntilOld', 60);
 
-    const [branches, remoteBranches, worktrees, stashes, currentBranch, baseBranch, allBranchNames] = await Promise.all([
+    const [branches, remoteBranches, worktrees, stashes, currentBranch, baseBranch] = await Promise.all([
       getBranchInfo(gitRoot),
       getRemoteBranchInfo(gitRoot),
       getWorktreeInfo(gitRoot),
       getStashInfo(gitRoot),
       getCurrentBranch(gitRoot),
       getBaseBranch(gitRoot),
-      getAllBranchNames(gitRoot),
     ]);
 
-    const branchNotesMap = getBranchNotes(context, gitRoot);
-    const branchNotes: Record<string, BranchNote> = Object.fromEntries(branchNotesMap);
     const cleanupRulesArray = getCleanupRules(context, gitRoot);
-    const cleanupRules: Record<string, CleanupRule> = Object.fromEntries(
-      cleanupRulesArray.map(rule => [rule.id, rule])
-    );
     const recoveryLog = getRecoveryLog(context, gitRoot);
-    const showSponsorBanner = !context.globalState.get<boolean>('sponsorBannerDismissed', false);
+    const branchNotes = getBranchNotes(context, gitRoot);
 
     // Phase 1: Render immediately with local git data (no PR API calls)
     panel.webview.html = getWebviewContent(
       panel.webview,
-      branches,
-      remoteBranches,
-      worktrees,
-      stashes,
-      branchNotes,
-      cleanupRules,
-      daysUntilStale,
-      daysUntilOld,
-      currentBranch,
-      baseBranch,
-      {},
-      recoveryLog,
-      allBranchNames,
-      showSponsorBanner,
-      repoContext.getRepositories().length,
-      repo.name
+      context.extensionUri,
+      buildInitialData(branches, remoteBranches, worktrees, stashes, cleanupRulesArray, recoveryLog, branchNotes, currentBranch ?? '', baseBranch, repo.name, daysUntilStale)
     );
 
     // Phase 2: Fetch PR data asynchronously and push to webview
@@ -500,7 +527,7 @@ async function showBranchManager(
         const branchNames = branches.map(b => b.name);
 
         if (platformInfo.platform === 'github') {
-          const token = gitHubSession?.accessToken;
+          const token = await getGitHubAccessToken();
           if (platformInfo.owner && platformInfo.repo) {
             prMap = await fetchGitHubPRs(platformInfo.owner, platformInfo.repo, branchNames, token);
           }
@@ -517,22 +544,36 @@ async function showBranchManager(
         }
 
         if (prMap.size > 0) {
-          const prData: Record<string, PRStatus> = Object.fromEntries(prMap);
-          void panel.webview.postMessage({ command: 'prStatusUpdate', data: prData });
+          // Webview expects mapped PRInfo shape, not raw PRStatus.
+          for (const [branchName, pr] of prMap) {
+            safePost({ command: 'prStatusUpdate', data: { branchName, pr: mapPR(pr) } });
+          }
         }
 
         branchTreeProvider.setPRStatuses(prMap);
         branchTreeProvider.scheduleRefresh();
-      } catch {
-        // PR fetch is supplementary — don't block on failure
+      } catch (err) {
+        // PR fetch is supplementary — don't block the panel render on failure,
+        // but surface auth/rate-limit problems so users know why PR badges
+        // are missing. Token errors get a sticky info message; transient
+        // network errors are logged silently.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/401|403|rate limit/i.test(msg)) {
+          vscode.window.showWarningMessage(`PR status unavailable: ${msg}`);
+        } else {
+          console.warn('[git-branch-manager] PR fetch failed:', msg);
+        }
       }
     })();
   }
 
   await updateWebview();
 
+  type WebviewMessage = { command: string } & Record<string, unknown>;
+
   panel.webview.onDidReceiveMessage(
-    async (message) => {
+    async (message: WebviewMessage) => {
+      if (!message || typeof message.command !== 'string') return;
       const repo = await repoContext.getActiveRepository();
       if (!repo) return;
       const gitRoot = repo.path;
@@ -540,8 +581,9 @@ async function showBranchManager(
       switch (message.command) {
         case 'delete':
           try {
-            await deleteBranchForce(gitRoot, message.branch);
-            vscode.window.showInformationMessage(`Deleted branch: ${message.branch}`);
+            const delBranch = requireValidRef(reqStr(message.branchName, 'branchName'), 'branchName');
+            await deleteBranchForce(gitRoot, delBranch);
+            vscode.window.showInformationMessage(`Deleted branch: ${delBranch}`);
 
             const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
             await context.globalState.update('totalBranchesDeleted', totalDeleted + 1);
@@ -555,7 +597,7 @@ async function showBranchManager(
           break;
 
         case 'deleteMultiple':
-          const branchesToDelete = message.branches as string[];
+          const branchesToDelete = reqStrArray(message.branchNames, 'branchNames').map((b) => requireValidRef(b, 'branchNames'));
           const results = { success: [] as string[], failed: [] as Array<{ branch: string; error: string }> };
 
           for (const branch of branchesToDelete) {
@@ -585,8 +627,9 @@ async function showBranchManager(
 
         case 'switch':
           try {
-            await gitCommand(['checkout', message.branch], gitRoot);
-            vscode.window.showInformationMessage(`Switched to branch: ${message.branch}`);
+            const switchBranchName = requireValidRef(reqStr(message.branchName, 'branchName'), 'branchName');
+            await gitCommand(['checkout', switchBranchName], gitRoot);
+            vscode.window.showInformationMessage(`Switched to branch: ${switchBranchName}`);
             await updateWebview();
             await updateGlobalStatusBar();
           } catch (error) {
@@ -612,8 +655,9 @@ async function showBranchManager(
 
         case 'applyStash':
           try {
-            await applyStash(gitRoot, message.index);
-            vscode.window.showInformationMessage(`Applied stash ${message.index}`);
+            const idx = reqNum(message.index, 'index');
+            await applyStash(gitRoot, idx);
+            vscode.window.showInformationMessage(`Applied stash ${idx}`);
             await updateWebview();
           } catch (error) {
             vscode.window.showErrorMessage(`Failed to apply stash: ${error}`);
@@ -622,8 +666,9 @@ async function showBranchManager(
 
         case 'popStash':
           try {
-            await popStash(gitRoot, message.index);
-            vscode.window.showInformationMessage(`Popped stash ${message.index}`);
+            const idx = reqNum(message.index, 'index');
+            await popStash(gitRoot, idx);
+            vscode.window.showInformationMessage(`Popped stash ${idx}`);
             await updateWebview();
           } catch (error) {
             vscode.window.showErrorMessage(`Failed to pop stash: ${error}`);
@@ -632,8 +677,9 @@ async function showBranchManager(
 
         case 'dropStash':
           try {
-            await dropStash(gitRoot, message.index);
-            vscode.window.showInformationMessage(`Dropped stash ${message.index}`);
+            const idx = reqNum(message.index, 'index');
+            await dropStash(gitRoot, idx);
+            vscode.window.showInformationMessage(`Dropped stash ${idx}`);
             await updateWebview();
           } catch (error) {
             vscode.window.showErrorMessage(`Failed to drop stash: ${error}`);
@@ -659,8 +705,14 @@ async function showBranchManager(
 
         case 'compareBranches':
           try {
-            const comparison = await compareBranches(gitRoot, message.branch1, message.branch2);
-            panel.webview.postMessage({ command: 'comparisonResult', data: comparison });
+            const branchA = requireValidRef(reqStr(message.branchA, 'branchA'), 'branchA');
+            const branchB = requireValidRef(reqStr(message.branchB, 'branchB'), 'branchB');
+            const comparison = await compareBranches(gitRoot, branchA, branchB);
+            safePost({ command: 'comparisonResult', data: {
+              ahead: (comparison.commitsA ?? []).map((c: CommitInfo) => ({ hash: c.hash, message: c.message, author: c.author, date: c.date })),
+              behind: (comparison.commitsB ?? []).map((c: CommitInfo) => ({ hash: c.hash, message: c.message, author: c.author, date: c.date })),
+              files: (comparison.files ?? []).map((f: FileChange) => ({ path: f.path, status: f.status, additions: 0, deletions: 0 })),
+            } });
           } catch (error) {
             vscode.window.showErrorMessage(`Failed to compare branches: ${error}`);
           }
@@ -668,8 +720,9 @@ async function showBranchManager(
 
         case 'getTimeline':
           try {
-            const timeline = await getBranchTimeline(gitRoot, message.branchName, 5);
-            panel.webview.postMessage({ command: 'timelineResult', data: { branchName: message.branchName, commits: timeline } });
+            const branchName = requireValidRef(reqStr(message.branchName, 'branchName'), 'branchName');
+            const timeline = await getBranchTimeline(gitRoot, branchName, 5);
+            safePost({ command: 'timelineResult', data: { branchName, commits: timeline } });
           } catch {
             // Silent failure — timeline is supplementary
           }
@@ -677,19 +730,20 @@ async function showBranchManager(
 
         case 'renameBranch':
           try {
+            const oldName = requireValidRef(reqStr(message.oldName, 'oldName'), 'oldName');
             const newName = await vscode.window.showInputBox({
               prompt: 'New branch name',
-              value: message.oldName,
+              value: oldName,
               validateInput: (value) => {
                 if (!value) return 'Branch name cannot be empty';
-                if (value === message.oldName) return 'New name must be different';
+                if (value === oldName) return 'New name must be different';
                 return null;
               },
             });
 
             if (newName) {
-              await renameBranch(gitRoot, message.oldName, newName);
-              vscode.window.showInformationMessage(`Renamed ${message.oldName} to ${newName}`);
+              await renameBranch(gitRoot, oldName, newName);
+              vscode.window.showInformationMessage(`Renamed ${oldName} to ${newName}`);
               await updateWebview();
               await updateGlobalStatusBar();
             }
@@ -700,9 +754,9 @@ async function showBranchManager(
 
         case 'batchRename':
           try {
-            const pattern = message.pattern;
-            const replacement = message.replacement;
-            const branchesToRename = message.branches as string[];
+            const pattern = reqStr(message.pattern, 'pattern');
+            const replacement = reqStr(message.replacement, 'replacement');
+            const branchesToRename = reqStrArray(message.branches, 'branches');
 
             const validation = validateRegexPattern(pattern);
             if (!validation.valid) {
@@ -736,20 +790,29 @@ async function showBranchManager(
 
             if (confirm === 'Rename All') {
               let successCount = 0;
+              const failures: string[] = [];
               for (const rename of renames) {
                 try {
                   await renameBranch(gitRoot, rename.old, rename.new);
                   successCount++;
                 } catch (error) {
-                  vscode.window.showErrorMessage(`Failed to rename ${rename.old}: ${error}`);
+                  const msg = error instanceof Error ? error.message : String(error);
+                  failures.push(`${rename.old}: ${msg}`);
                 }
               }
 
               if (successCount > 0) {
                 vscode.window.showInformationMessage(`Renamed ${successCount} branches`);
-                await updateWebview();
-                await updateGlobalStatusBar();
               }
+              if (failures.length > 0) {
+                // Roll up failures into one notification (avoids N popups)
+                const detail = failures.length <= 3
+                  ? failures.join('; ')
+                  : `${failures.slice(0, 3).join('; ')}; +${failures.length - 3} more`;
+                vscode.window.showWarningMessage(`Failed to rename ${failures.length} branches: ${detail}`);
+              }
+              await updateWebview();
+              await updateGlobalStatusBar();
             }
           } catch (error) {
             vscode.window.showErrorMessage(`Batch rename failed: ${error}`);
@@ -758,7 +821,9 @@ async function showBranchManager(
 
         case 'deleteRemote':
           try {
-            const fullName = `${message.remote}/${message.branch}`;
+            const remote = reqStr(message.remote, 'remote');
+            const branch = requireValidRef(reqStr(message.branch, 'branch'), 'branch');
+            const fullName = `${remote}/${branch}`;
             await deleteBranchForce(gitRoot, fullName);
             vscode.window.showInformationMessage(`Deleted remote branch: ${fullName}`);
             await updateWebview();
@@ -767,8 +832,14 @@ async function showBranchManager(
           }
           break;
 
-        case 'deleteMultipleRemotes':
-          const remoteBranches = message.branches as Array<{ remote: string; name: string }>;
+        case 'deleteMultipleRemotes': {
+          const raw = message.branches;
+          if (!Array.isArray(raw)) break;
+          const remoteBranches = raw.filter((rb): rb is { remote: string; name: string } =>
+            rb !== null && typeof rb === 'object' &&
+            typeof (rb as Record<string, unknown>).remote === 'string' &&
+            typeof (rb as Record<string, unknown>).name === 'string'
+          );
           let successCount = 0;
 
           for (const rb of remoteBranches) {
@@ -785,39 +856,56 @@ async function showBranchManager(
             await updateWebview();
           }
           break;
+        }
 
         case 'promptBranchNote': {
+          const branchName = requireValidRef(reqStr(message.branch, 'branch'), 'branch');
           const noteText = await vscode.window.showInputBox({
-            prompt: `Add note for ${message.branch}`,
+            prompt: `Add note for ${branchName}`,
             placeHolder: 'Enter a note for this branch',
           });
           if (noteText !== undefined) {
-            await saveBranchNote(context, gitRoot, message.branch, noteText);
+            await saveBranchNote(context, gitRoot, branchName, noteText);
             await updateWebview();
           }
           break;
         }
 
+        case 'saveNote':
         case 'saveBranchNote':
-          await saveBranchNote(context, gitRoot, message.branch, message.note);
+          await saveBranchNote(
+            context,
+            gitRoot,
+            reqStr(message.branchName ?? message.branch, 'branchName'),
+            typeof message.note === 'string' ? message.note : ''
+          );
           await updateWebview();
           break;
 
         case 'saveCleanupRules':
+          if (!isCleanupRuleArray(message.rules)) {
+            vscode.window.showErrorMessage('Invalid cleanup rules payload');
+            break;
+          }
           await saveCleanupRules(context, gitRoot, message.rules);
           await updateWebview();
           break;
 
-        case 'evaluateRule':
-          const rule = message.rule as CleanupRule;
+        case 'evaluateRule': {
+          const r = message.rule;
+          if (!r || typeof r !== 'object' || typeof (r as Record<string, unknown>).id !== 'string') {
+            break;
+          }
+          const rule = r as CleanupRule;
           const allBranches = await getBranchInfo(gitRoot);
           const matchingBranches = evaluateCleanupRule(allBranches, rule);
 
-          panel.webview.postMessage({
+          safePost({
             command: 'ruleEvaluationResult',
             matches: matchingBranches.map((b) => b.name),
           });
           break;
+        }
 
         case 'exportRules': {
           const exportedRules = getCleanupRules(context, gitRoot);
@@ -870,8 +958,8 @@ async function showBranchManager(
 
         case 'connectGitHub':
           try {
-            gitHubSession = await vscode.authentication.getSession('github', ['repo'], { createIfNone: true });
-            if (gitHubSession) {
+            const token = await getGitHubAccessToken(/* silent */ false);
+            if (token) {
               vscode.window.showInformationMessage('Connected to GitHub');
               await updateWebview();
             }
@@ -882,6 +970,10 @@ async function showBranchManager(
 
         case 'createBranch':
           void createBranchFromTemplate(repoContext);
+          break;
+
+        case 'createWorktree':
+          void createWorktreeFromBranch(repoContext);
           break;
 
         case 'openSupport':
@@ -925,7 +1017,8 @@ async function showBranchManager(
         }
 
         case 'restoreBranch': {
-          const { branchName, commitHash } = message;
+          const branchName = requireValidRef(reqStr(message.branchName, 'branchName'), 'branchName');
+          const commitHash = reqStr(message.commitHash, 'commitHash');
           const result = await restoreFromLog(context, gitRoot, branchName, commitHash);
           if (!result.success) {
             vscode.window.showErrorMessage(`Failed to restore: ${result.error}`);
@@ -936,18 +1029,21 @@ async function showBranchManager(
         }
 
         case 'clearRecoveryEntry': {
-          const { branchName, commitHash } = message;
+          const branchName = requireValidRef(reqStr(message.branchName, 'branchName'), 'branchName');
+          const commitHash = reqStr(message.commitHash, 'commitHash');
           await removeRecoveryEntry(context, gitRoot, branchName, commitHash);
           await updateWebview();
           break;
         }
 
         case 'openDiff': {
-          const { branchA, branchB, filePath } = message;
+          const branchA = requireValidRef(reqStr(message.branchA, 'branchA'), 'branchA');
+          const branchB = requireValidRef(reqStr(message.branchB, 'branchB'), 'branchB');
+          const filePath = reqStr(message.filePath, 'filePath');
           // Handle renamed files (R status): path is "oldPath\tnewPath"
-          const paths = (filePath as string).split('\t');
-          const fileInA = paths.length > 1 ? paths[1] : paths[0]; // new path in branchA
-          const fileInB = paths[0]; // old path in branchB
+          const paths = filePath.split('\t');
+          const fileInB = paths[0] ?? filePath; // old path in branchB
+          const fileInA = paths.length > 1 ? (paths[1] ?? fileInB) : fileInB; // new path in branchA
 
           const leftParams = `branch=${encodeURIComponent(branchB)}&file=${encodeURIComponent(fileInB)}&repo=${encodeURIComponent(gitRoot)}`;
           const rightParams = `branch=${encodeURIComponent(branchA)}&file=${encodeURIComponent(fileInA)}&repo=${encodeURIComponent(gitRoot)}`;
@@ -971,1638 +1067,100 @@ async function showBranchManager(
   );
 }
 
-/**
- * Generates HTML content for the webview.
- * @param webview - The webview instance
- * @param branches - Local branches
- * @param remoteBranches - Remote branches
- * @param worktrees - Git worktrees
- * @param stashes - Git stashes
- * @param branchNotes - Saved branch notes
- * @param cleanupRules - Cleanup automation rules
- * @param daysUntilStale - Days before branch is stale
- * @param daysUntilOld - Days before branch is old
- * @param currentBranch - Currently checked out branch
- * @param baseBranch - Base branch for comparisons
- * @param githubPRs - GitHub pull requests by branch
- * @param recoveryLog - Deleted branches available for recovery
- * @returns HTML string for webview
- */
+// ─── Webview HTML scaffold ───────────────────────────────────────────────────
+
 function getWebviewContent(
   webview: vscode.Webview,
-  branches: BranchInfo[],
-  remoteBranches: RemoteBranchInfo[],
-  worktrees: WorktreeInfo[],
-  stashes: StashInfo[],
-  branchNotes: Record<string, BranchNote>,
-  cleanupRules: Record<string, CleanupRule>,
-  daysUntilStale: number,
-  _daysUntilOld: number,
-  currentBranch: string | null,
-  _baseBranch: string,
-  _githubPRs: Record<string, PRStatus>,
-  recoveryLog: DeletedBranchEntry[],
-  allBranchNames: string[] = [],
-  showSponsorBanner: boolean = false,
-  repoCount: number = 1,
-  repoName: string = ''
+  extensionUri: vscode.Uri,
+  data: import('./webview/types').InitialData
 ): string {
   const nonce = getNonce();
-
-  const protectedNames = ['main', 'master', 'develop', 'dev', 'staging', 'production'];
-  const isProtected = (b: BranchInfo) => b.isCurrentBranch || protectedNames.includes(b.name);
-
-  const protectedBranches = branches.filter(isProtected);
-  const nonProtected = branches.filter(b => !isProtected(b));
-
-  const mergedBranches = nonProtected.filter(b => b.isMerged);
-  const staleBranches = nonProtected.filter(b => !b.isMerged && b.daysOld > daysUntilStale && !b.remoteGone);
-  const goneBranches = nonProtected.filter(b => b.remoteGone && !b.isMerged);
-  const activeBranches = nonProtected.filter(b => !b.isMerged && b.daysOld <= daysUntilStale && !b.remoteGone);
-
-  const avgHealth = branches.length > 0
-    ? Math.round(branches.reduce((sum, b) => sum + (b.healthScore || 100), 0) / branches.length)
-    : 100;
-
-  function renderBranchRow(branch: BranchInfo, mode: 'delete' | 'switch'): string {
-    const healthStatus = branch.healthStatus || 'healthy';
-    const note = branchNotes[branch.name];
-    const noteHtml = note
-      ? `<div class="row-note" title="${escapeHtml(note.note)}">📝 ${escapeHtml(note.note)}</div>`
-      : '';
-
-    const prBadge = branch.prStatus
-      ? `<span class="pr-badge" data-action="openUrl" data-url="${escapeHtml(branch.prStatus.url)}" title="${escapeHtml(branch.prStatus.title)}">pr-${branch.prStatus.number}</span>`
-      : '';
-
-    const abBadge = (branch.ahead !== undefined && branch.behind !== undefined)
-      ? `<span class="ab-badge" title="Ahead: ${branch.ahead}, Behind: ${branch.behind}">+${branch.ahead}-${branch.behind}</span>`
-      : '';
-
-    const checkbox = mode === 'delete'
-      ? `<input type="checkbox" class="branch-checkbox" data-branch="${escapeHtml(branch.name)}"/>`
-      : '';
-
-    const actionBtn = mode === 'delete'
-      ? `<button class="row-action-btn row-delete" data-action="deleteBranch" data-branch="${escapeHtml(branch.name)}">Delete</button>`
-      : `<button class="row-action-btn row-switch" data-action="switchTo" data-branch="${escapeHtml(branch.name)}">Switch</button>`;
-
-    return `<div class="branch-row" data-branch="${escapeHtml(branch.name)}">
-    ${checkbox}
-    <span class="health-dot health-${healthStatus}" title="${escapeHtml(branch.healthReason || '')}"></span>
-    <div class="row-info" data-action="addNote" data-branch="${escapeHtml(branch.name)}">
-      <span class="row-name">${escapeHtml(branch.name)}</span>
-      ${prBadge}
-      ${noteHtml}
-    </div>
-    <span class="row-spacer"></span>
-    <span class="row-age">${formatAge(branch.daysOld)}</span>
-    ${abBadge}
-    ${actionBtn}
-  </div>`;
-  }
-
-  function renderBranchGroup(title: string, groupBranches: BranchInfo[], mode: 'delete' | 'switch', groupId: string): string {
-    if (groupBranches.length === 0) return '';
-    const groupCheckbox = mode === 'delete'
-      ? `<input type="checkbox" class="group-checkbox" data-action="toggleGroup" data-group="${groupId}"/>`
-      : '';
-    const deleteBtn = mode === 'delete'
-      ? `<button class="btn-group-action" data-action="deleteGroupSelected" data-group="${groupId}">Delete Selected</button>`
-      : '';
-    return `<div class="branch-group" data-group="${groupId}">
-    <div class="group-header">
-      ${groupCheckbox}
-      <span class="group-title">${title} (${groupBranches.length})</span>
-      <span class="group-spacer"></span>
-      ${deleteBtn}
-    </div>
-    ${groupBranches.map(b => renderBranchRow(b, mode)).join('')}
-  </div>`;
-  }
-
-  function renderRemoteBranchRow(branch: RemoteBranchInfo): string {
-    return `
-      <tr data-remote-branch="${escapeHtml(branch.remote)}/${escapeHtml(branch.name)}">
-        <td><input type="checkbox" class="remote-branch-checkbox" data-remote="${escapeHtml(branch.remote)}" data-branch="${escapeHtml(branch.name)}"/></td>
-        <td>${escapeHtml(branch.remote)}/${escapeHtml(branch.name)}</td>
-        <td>${branch.daysOld ? formatAge(branch.daysOld) : 'Unknown'}</td>
-        <td>${branch.isMerged ? '✓' : ''}</td>
-        <td>${branch.isGone ? '🔴 Gone' : ''}</td>
-        <td>${escapeHtml(branch.localBranch || '')}</td>
-        <td>
-          <button class="action-btn" data-action="deleteRemoteBranch" data-remote="${escapeHtml(branch.remote)}" data-branch="${escapeHtml(branch.name)}">Delete</button>
-        </td>
-      </tr>
-    `;
-  }
-
-  function renderWorktreeRow(worktree: WorktreeInfo): string {
-    return `
-      <tr>
-        <td>${escapeHtml(worktree.path)}</td>
-        <td>${escapeHtml(worktree.branch)}</td>
-        <td>${worktree.isMainWorktree ? '✓' : ''}</td>
-        <td>${worktree.isLocked ? '🔒' : ''}</td>
-        <td>${worktree.prunable ? '⚠️' : ''}</td>
-      </tr>
-    `;
-  }
-
-  function renderStashRow(stash: StashInfo): string {
-    const fileList =
-      stash.files && stash.files.length > 0 ? `<div class="stash-files">${stash.files.slice(0, 5).map((f) => escapeHtml(f)).join(', ')}</div>` : '';
-
-    return `
-      <tr>
-        <td>${stash.index}</td>
-        <td>
-          <div class="stash-message">${escapeHtml(stash.message)}</div>
-          ${fileList}
-        </td>
-        <td>${escapeHtml(stash.branch)}</td>
-        <td>${formatAge(stash.daysOld)}</td>
-        <td>${stash.filesChanged || 0}</td>
-        <td>
-          <button class="action-btn" data-action="applyStash" data-index="${stash.index}">Apply</button>
-          <button class="action-btn" data-action="popStash" data-index="${stash.index}">Pop</button>
-          <button class="action-btn" data-action="dropStash" data-index="${stash.index}">Drop</button>
-        </td>
-      </tr>
-    `;
-  }
-
-  function renderRecoveryRow(entry: DeletedBranchEntry): string {
-    const timeAgo = formatRecoveryTime(entry.deletedAt);
-    return `
-      <tr data-recovery="${escapeHtml(entry.branchName)}">
-        <td>
-          <div class="branch-name">${escapeHtml(entry.branchName)}</div>
-        </td>
-        <td>${timeAgo}</td>
-        <td><code>${escapeHtml(entry.commitHash.substring(0, 7))}</code></td>
-        <td>
-          <button class="action-btn" data-action="restoreBranch" data-branch="${escapeHtml(entry.branchName)}" data-hash="${escapeHtml(entry.commitHash)}">Restore</button>
-          <button class="action-btn" data-action="dismissRecoveryEntry" data-branch="${escapeHtml(entry.branchName)}" data-hash="${escapeHtml(entry.commitHash)}">Dismiss</button>
-        </td>
-      </tr>
-    `;
-  }
-
-  function formatRecoveryTime(timestamp: number): string {
-    const seconds = Math.floor((Date.now() - timestamp) / 1000);
-    if (seconds < 60) return 'just now';
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
-  }
-
-  const remoteBranchRows = remoteBranches.map(renderRemoteBranchRow).join('');
-  const worktreeRows = worktrees.map(renderWorktreeRow).join('');
-  const stashRows = stashes.map(renderStashRow).join('');
-  const recoveryRows = recoveryLog.map(renderRecoveryRow).join('');
-
-  const cleanupRulesArray = Object.entries(cleanupRules).map(([_id, rule]) => rule);
-  const rulesJson = JSON.stringify(cleanupRulesArray).replace(/</g, '\\u003c');
+  const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'webview.js'));
+  const initialDataJson = escapeForScriptTag(JSON.stringify(data));
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}'; frame-ancestors 'none';">
-  <title>Git Branch Manager</title>
-  <style nonce="${nonce}">
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'nonce-${nonce}' ${webview.cspSource}; style-src 'unsafe-inline'; font-src ${webview.cspSource} data:; img-src ${webview.cspSource} data:;"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body { background: var(--bg, var(--vscode-editor-background)); color: var(--fg, var(--vscode-editor-foreground)); }
+
+    /* Design tokens — dark theme default */
+    :root, [data-theme="dark"] {
+      --bg:           #0a0a0b;
+      --bg-elevated:  #111113;
+      --bg-raised:    #18181b;
+      --bg-hover:     rgba(255,255,255,0.06);
+      --fg:           #d4d4d8;
+      --fg-strong:    #fafafa;
+      --fg-muted:     #71717a;
+      --fg-subtle:    #52525b;
+      --fg-faint:     #3f3f46;
+      --border:       rgba(255,255,255,0.08);
+      --border-strong:rgba(255,255,255,0.14);
+      --accent:       #34d399;
+      --accent-strong:#10b981;
+      --accent-soft:  rgba(52,211,153,0.12);
+      --accent-ring:  rgba(52,211,153,0.35);
+      --healthy:      #34d399;
+      --warning:      #fbbf24;
+      --danger:       #f43f5e;
+      --critical:     #f43f5e;
+      --info:         #60a5fa;
+      --pr:           #a78bfa;
+      --bg-input:     rgba(255,255,255,0.04);
+      --bg-selected:  rgba(52,211,153,0.10);
+      --border-focus: rgba(52,211,153,0.45);
+      --row-py:       8px;
+      --shadow-toast:    0 8px 24px rgba(0,0,0,0.55);
+      --shadow-popover:  0 12px 32px rgba(0,0,0,0.6);
+      --shadow-drawer:   -8px 0 32px rgba(0,0,0,0.55);
+      --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    }
+    [data-theme="light"] {
+      --bg:           #f8f8f8;
+      --bg-elevated:  #ffffff;
+      --bg-raised:    #f1f1f3;
+      --bg-hover:     rgba(0,0,0,0.05);
+      --fg:           #27272a;
+      --fg-strong:    #09090b;
+      --fg-muted:     #71717a;
+      --fg-subtle:    #a1a1aa;
+      --fg-faint:     #d4d4d8;
+      --border:       rgba(0,0,0,0.08);
+      --border-strong:rgba(0,0,0,0.14);
+      --bg-input:     rgba(0,0,0,0.03);
+      --bg-selected:  rgba(16,185,129,0.10);
+      --border-focus: rgba(16,185,129,0.45);
+      --shadow-toast:    0 4px 16px rgba(0,0,0,0.15);
+      --shadow-popover:  0 8px 24px rgba(0,0,0,0.18);
+      --shadow-drawer:   -4px 0 16px rgba(0,0,0,0.12);
     }
 
-    body {
-      font-family: var(--vscode-font-family);
-      font-size: var(--vscode-font-size);
-      color: var(--vscode-foreground);
-      background-color: var(--vscode-editor-background);
-      padding: 20px;
-    }
+    body { font-family: var(--font-sans); font-size: 13px; }
+    button, input, textarea, select { font-family: inherit; }
+    button { cursor: pointer; }
 
-    h1, h2, h3 {
-      margin-bottom: 16px;
-      font-weight: 600;
-    }
-
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 24px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-    }
-
-    .header-actions {
-      display: flex;
-      gap: 8px;
-    }
-
-    .tabs {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 16px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-    }
-
-    .tab {
-      padding: 8px 16px;
-      background: transparent;
-      border: none;
-      color: var(--vscode-foreground);
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      font-size: 14px;
-    }
-
-    .tab:hover {
-      background: var(--vscode-list-hoverBackground);
-    }
-
-    .tab.active {
-      border-bottom-color: var(--vscode-focusBorder);
-    }
-
-    .tab-content {
-      display: none;
-    }
-
-    .tab-content.active {
-      display: block;
-    }
-
-    .toolbar {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 16px;
-      flex-wrap: wrap;
-    }
-
-    .btn {
-      padding: 6px 12px;
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      border: none;
-      border-radius: 2px;
-      cursor: pointer;
-      font-size: 13px;
-    }
-
-    .btn:hover {
-      background: var(--vscode-button-hoverBackground);
-    }
-
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    .btn-secondary {
-      background: var(--vscode-button-secondaryBackground);
-      color: var(--vscode-button-secondaryForeground);
-    }
-
-    .btn-secondary:hover {
-      background: var(--vscode-button-secondaryHoverBackground);
-    }
-
-    .action-btn {
-      padding: 4px 8px;
-      background: var(--vscode-button-secondaryBackground);
-      color: var(--vscode-button-secondaryForeground);
-      border: none;
-      border-radius: 2px;
-      cursor: pointer;
-      font-size: 12px;
-      margin-right: 4px;
-    }
-
-    .action-btn:hover {
-      background: var(--vscode-button-secondaryHoverBackground);
-    }
-
-    .action-btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 16px;
-    }
-
-    th {
-      text-align: left;
-      padding: 8px;
-      background: var(--vscode-editor-inactiveSelectionBackground);
-      border-bottom: 1px solid var(--vscode-panel-border);
-      font-weight: 600;
-      font-size: 12px;
-    }
-
-    td {
-      padding: 8px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-      font-size: 13px;
-    }
-
-    tr:hover {
-      background: var(--vscode-list-hoverBackground);
-    }
-
-    .current-branch {
-      background: var(--vscode-list-inactiveSelectionBackground);
-    }
-
-    .health-indicator {
-      display: inline-block;
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-    }
-
-    .health-healthy { background-color: var(--vscode-testing-iconPassed, #4ec9b0); }
-    .health-warning { background-color: var(--vscode-editorWarning-foreground, #cca700); }
-    .health-critical { background-color: var(--vscode-editorError-foreground, #f14c4c); }
-    .health-danger { background-color: var(--vscode-inputValidation-errorBorder, #be1100); }
-
-    /* Search */
-    .search-bar { margin-bottom: 12px; }
-    .search-input { width: 100%; padding: 6px 10px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 4px; font-size: 13px; }
-
-    /* Filter pills + sort */
-    .filter-bar { display: flex; align-items: center; margin-bottom: 12px; gap: 8px; }
-    .filter-pills { display: flex; gap: 6px; flex: 1; }
-    .pill { padding: 4px 12px; border-radius: 12px; border: 1px solid var(--vscode-panel-border); background: transparent; color: var(--vscode-foreground); font-size: 12px; cursor: pointer; opacity: 0.5; }
-    .pill.pill-on { opacity: 1; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
-
-    /* Branch groups */
-    .branch-group { margin-bottom: 8px; }
-    .group-header { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
-    .group-title { font-weight: 600; font-size: 13px; }
-    .group-spacer { flex: 1; }
-    .btn-group-action { padding: 3px 10px; background: var(--vscode-errorForeground); color: #fff; border: none; border-radius: 3px; font-size: 11px; cursor: pointer; opacity: 0.8; }
-    .btn-group-action:hover { opacity: 1; }
-
-    /* Branch rows */
-    .branch-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
-    .branch-row:hover { background: var(--vscode-list-hoverBackground); }
-    .health-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-    .row-info { display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; }
-    .row-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .row-note { font-size: 11px; color: var(--vscode-descriptionForeground); font-style: italic; }
-    .row-spacer { flex: 1; }
-    .row-age { font-size: 12px; opacity: 0.7; white-space: nowrap; }
-
-    /* Ahead/behind badge */
-    .ab-badge { font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); white-space: nowrap; font-family: monospace; }
-
-    /* PR badge */
-    .pr-badge { font-size: 11px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--vscode-panel-border); cursor: pointer; white-space: nowrap; }
-
-    /* Row action buttons */
-    .row-action-btn { padding: 3px 12px; border: none; border-radius: 3px; font-size: 12px; cursor: pointer; white-space: nowrap; }
-    .row-delete { background: var(--vscode-errorForeground); color: #fff; }
-    .row-switch { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-    .row-action-btn:hover { opacity: 0.85; }
-
-    /* Protected */
-    .protected-section { margin-top: 12px; font-size: 12px; opacity: 0.6; }
-    .protected-section summary { cursor: pointer; }
-
-    .sort-control select { background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 2px; padding: 4px 8px; font-size: 12px; }
-
-    .flex-1 { flex: 1; }
-    .compare-label { width: 80px; font-size: 12px; }
-    .compare-row { margin-bottom: 12px; }
-    .timeline-section { margin-top: 16px; }
-    .hint-text { font-size: 12px; color: var(--vscode-descriptionForeground); }
-    .hint-text-mt { font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 8px; }
-    .recovery-count { margin-left: auto; color: var(--vscode-descriptionForeground); }
-    .rule-actions { display: flex; gap: 8px; margin-top: 12px; }
-
-    .branch-name {
-      font-weight: 500;
-    }
-
-    .branch-note {
-      font-size: 11px;
-      color: var(--vscode-descriptionForeground);
-      margin-top: 2px;
-      font-style: italic;
-    }
-
-    .pr-link {
-      color: var(--vscode-textLink-foreground);
-      text-decoration: none;
-      font-size: 12px;
-    }
-
-    .pr-link:hover {
-      text-decoration: underline;
-    }
-
-    .remote-gone {
-      color: var(--vscode-errorForeground);
-      font-size: 12px;
-    }
-
-    .ahead-behind {
-      font-size: 11px;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .stash-message {
-      font-weight: 500;
-    }
-
-    .stash-files {
-      font-size: 11px;
-      color: var(--vscode-descriptionForeground);
-      margin-top: 2px;
-    }
-
-    .filter-section {
-      margin-bottom: 16px;
-      padding: 12px;
-      background: var(--vscode-editor-inactiveSelectionBackground);
-      border-radius: 4px;
-    }
-
-    .filter-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 8px;
-    }
-
-    .filter-row:last-child {
-      margin-bottom: 0;
-    }
-
-    input[type="text"],
-    input[type="number"],
-    select {
-      padding: 4px 8px;
-      background: var(--vscode-input-background);
-      color: var(--vscode-input-foreground);
-      border: 1px solid var(--vscode-input-border);
-      border-radius: 2px;
-      font-size: 13px;
-    }
-
-    input[type="checkbox"] {
-      cursor: pointer;
-    }
-
-    .tools-section {
-      margin-bottom: 24px;
-    }
-
-    .tool-card {
-      padding: 16px;
-      background: var(--vscode-editor-inactiveSelectionBackground);
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: 4px;
-      margin-bottom: 16px;
-    }
-
-    .tool-card h3 {
-      margin-bottom: 12px;
-    }
-
-    .rule-item {
-      padding: 12px;
-      background: var(--vscode-editor-background);
-      border: 1px solid var(--vscode-panel-border);
-      border-radius: 4px;
-      margin-bottom: 8px;
-    }
-
-    .rule-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-    }
-
-    .rule-name {
-      font-weight: 600;
-    }
-
-    .rule-conditions {
-      font-size: 12px;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .empty-state {
-      text-align: center;
-      padding: 48px;
-      color: var(--vscode-descriptionForeground);
-    }
-
-    .batch-rename-form {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-
-    .batch-rename-form input {
-      flex: 1;
-    }
-
-    .comparison-section { margin: 12px 0; }
-    .comparison-section h3 { margin-bottom: 8px; }
-    .commit-row { padding: 4px 0; font-size: 12px; }
-    .commit-hash { font-family: monospace; opacity: 0.8; }
-    .file-change-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
-    .status-badge { display: inline-block; width: 20px; text-align: center; font-weight: bold; font-size: 11px; border-radius: 3px; padding: 1px 4px; }
-    .status-a { background: var(--vscode-gitDecoration-addedResourceForeground, #2ea043); color: #fff; }
-    .status-m { background: var(--vscode-gitDecoration-modifiedResourceForeground, #d29922); color: #fff; }
-    .status-d { background: var(--vscode-gitDecoration-deletedResourceForeground, #f85149); color: #fff; }
-    .status-r { background: var(--vscode-gitDecoration-renamedResourceForeground, #58a6ff); color: #fff; }
-    .file-path { font-family: monospace; font-size: 12px; }
-
-    .health-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 8px 12px; background: var(--vscode-editor-inactiveSelectionBackground); border-radius: 4px; }
-    .health-score { font-size: 24px; font-weight: 600; }
-    .health-score-healthy { color: var(--vscode-testing-iconPassed, #4ec9b0); }
-    .health-score-warning { color: var(--vscode-editorWarning-foreground, #cca700); }
-    .health-score-critical { color: var(--vscode-editorError-foreground, #f14c4c); }
-    .health-label { font-size: 11px; opacity: 0.7; }
-    .stats-bar { display: flex; gap: 16px; font-size: 12px; opacity: 0.8; flex: 1; }
-    .stats-bar .warn { color: var(--vscode-editorWarning-foreground); }
-
-    .footer { margin-top: 12px; font-size: 11px; opacity: 0.5; display: flex; gap: 12px; }
-    .footer a { color: var(--vscode-textLink-foreground); text-decoration: none; }
-    .footer a:hover { text-decoration: underline; }
-
-    .sponsor-banner { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-top: 16px; background: var(--vscode-inputValidation-infoBackground); border: 1px solid var(--vscode-inputValidation-infoBorder); border-radius: 4px; font-size: 12px; }
-    .sponsor-banner a { color: var(--vscode-textLink-foreground); font-weight: 500; }
-    .sponsor-dismiss { background: none; border: none; color: var(--vscode-foreground); opacity: 0.6; cursor: pointer; margin-left: auto; padding: 0 4px; font-size: 16px; }
-    .sponsor-dismiss:hover { opacity: 1; }
+    @keyframes fade-in    { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes slide-up   { from { transform: translateY(8px); opacity: 0 } to { transform: none; opacity: 1 } }
+    @keyframes slide-in-right { from { transform: translateX(16px); opacity: 0 } to { transform: none; opacity: 1 } }
+    @keyframes toast-in   { from { transform: translateX(32px); opacity: 0 } to { transform: none; opacity: 1 } }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>Branch Manager${repoName ? `: ${escapeHtml(repoName)}` : ''}</h1>
-    <div class="header-actions">
-      ${repoCount > 1 ? '<button class="btn btn-secondary" data-action="switchRepository">Switch Repository</button>' : ''}
-      <button class="btn" data-action="createBranch">New Branch</button>
-      <button class="btn btn-secondary" data-action="refresh">Refresh</button>
-    </div>
-  </div>
-
-  <div class="tabs">
-    <button class="tab active" data-action="showTab" data-tab="branches">Local</button>
-    <button class="tab" data-action="showTab" data-tab="remotes">Remote</button>
-    <button class="tab" data-action="showTab" data-tab="worktrees">Worktrees (${worktrees.length})</button>
-    <button class="tab" data-action="showTab" data-tab="stashes">Stashes (${stashes.length})</button>
-    <button class="tab" data-action="showTab" data-tab="recovery">Recovery${recoveryLog.length > 0 ? ` (${recoveryLog.length})` : ''}</button>
-    <button class="tab" data-action="showTab" data-tab="tools">Tools</button>
-    <button class="tab" data-action="showTab" data-tab="compare">Compare</button>
-  </div>
-
-  <div id="branches-tab" class="tab-content active">
-    <div class="search-bar">
-      <input type="text" id="branch-search" placeholder="Search branches..." class="search-input">
-    </div>
-
-    <div class="filter-bar">
-      <div class="filter-pills">
-        <button class="pill pill-on" data-action="toggleFilter" data-filter="merged">Merged (${mergedBranches.length})</button>
-        <button class="pill pill-on" data-action="toggleFilter" data-filter="stale">Stale (${staleBranches.length})</button>
-        <button class="pill pill-on" data-action="toggleFilter" data-filter="orphaned">Orphaned (${goneBranches.length})</button>
-        <button class="pill pill-on" data-action="toggleFilter" data-filter="active">Active (${activeBranches.length})</button>
-      </div>
-      <div class="sort-control">
-        <select id="sort-select" data-action="sortBranches">
-          <option value="health">Health</option>
-          <option value="name">Name</option>
-          <option value="age">Age</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="health-bar">
-      <div>
-        <div class="health-score health-score-${avgHealth >= 70 ? 'healthy' : avgHealth >= 40 ? 'warning' : 'critical'}">${avgHealth}</div>
-        <div class="health-label">Health Score</div>
-      </div>
-      <div class="stats-bar">
-        <span><strong>${branches.length}</strong> total</span>
-        <span class="${mergedBranches.length > 0 ? 'warn' : ''}"><strong>${mergedBranches.length}</strong> merged</span>
-        <span class="${staleBranches.length > 0 ? 'warn' : ''}"><strong>${staleBranches.length}</strong> stale</span>
-        <span class="${goneBranches.length > 0 ? 'warn' : ''}"><strong>${goneBranches.length}</strong> orphaned</span>
-        <span><strong>${activeBranches.length}</strong> active</span>
-      </div>
-    </div>
-
-    <div id="branch-groups">
-      ${renderBranchGroup('Merged', mergedBranches, 'delete', 'merged')}
-      ${renderBranchGroup('Stale', staleBranches, 'delete', 'stale')}
-      ${renderBranchGroup('Orphaned', goneBranches, 'delete', 'orphaned')}
-      ${renderBranchGroup('Active', activeBranches, 'switch', 'active')}
-    </div>
-
-    ${protectedBranches.length > 0 ? `<details class="protected-section">
-      <summary>Protected: ${protectedBranches.map(b => escapeHtml(b.name)).join(', ')}</summary>
-    </details>` : ''}
-  </div>
-
-  <div id="remotes-tab" class="tab-content">
-    <div class="toolbar">
-      <button class="btn" data-action="deleteSelectedRemotes">Delete Selected</button>
-      <button class="btn btn-secondary" data-action="selectMergedRemotes">Select Merged</button>
-      <button class="btn btn-secondary" data-action="selectGoneRemotes">Select Gone</button>
-      <button class="btn btn-secondary" data-action="clearRemoteSelection">Clear</button>
-    </div>
-
-    ${
-      remoteBranches.length === 0
-        ? '<div class="empty-state">No remote branches found</div>'
-        : `
-    <table>
-      <thead>
-        <tr>
-          <th><input type="checkbox" id="select-all-remotes" data-action="toggleSelectAllRemotes"/></th>
-          <th>Branch</th>
-          <th>Age</th>
-          <th>Merged</th>
-          <th>Status</th>
-          <th>Local Branch</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${remoteBranchRows}
-      </tbody>
-    </table>
-    `
-    }
-  </div>
-
-  <div id="worktrees-tab" class="tab-content">
-    <div class="toolbar">
-      <button class="btn" data-action="createWorktree">Create Worktree</button>
-    </div>
-
-    ${
-      worktrees.length === 0
-        ? '<div class="empty-state">No worktrees found</div>'
-        : `
-    <table>
-      <thead>
-        <tr>
-          <th>Path</th>
-          <th>Branch</th>
-          <th>Main</th>
-          <th>Locked</th>
-          <th>Prunable</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${worktreeRows}
-      </tbody>
-    </table>
-    `
-    }
-  </div>
-
-  <div id="stashes-tab" class="tab-content">
-    <div class="toolbar">
-      <button class="btn" data-action="createStash">Create Stash</button>
-      <button class="btn btn-secondary" data-action="clearAllStashes">Clear All</button>
-    </div>
-
-    ${
-      stashes.length === 0
-        ? '<div class="empty-state">No stashes found</div>'
-        : `
-    <table>
-      <thead>
-        <tr>
-          <th>Index</th>
-          <th>Message</th>
-          <th>Branch</th>
-          <th>Age</th>
-          <th>Files</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${stashRows}
-      </tbody>
-    </table>
-    `
-    }
-  </div>
-
-  <div id="recovery-tab" class="tab-content">
-    <div class="toolbar">
-      <h3>🔄 Recovery Log</h3>
-      <span class="recovery-count">
-        ${recoveryLog.length} deleted branch${recoveryLog.length !== 1 ? 'es' : ''} available for recovery
-      </span>
-    </div>
-
-    ${
-      recoveryLog.length === 0
-        ? '<div class="empty-state"><p>No deleted branches to recover.</p><p class="hint-text-mt">Deleted branches will appear here for recovery.</p></div>'
-        : `
-    <table>
-      <thead>
-        <tr>
-          <th>Branch</th>
-          <th>Deleted</th>
-          <th>Commit</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${recoveryRows}
-      </tbody>
-    </table>
-    `
-    }
-  </div>
-
-  <div id="compare-tab" class="tab-content">
-    <div class="tool-card">
-      <h3>Compare Branches</h3>
-      <div class="filter-row compare-row">
-        <label class="compare-label">Branch A:</label>
-        <select id="compare-branch-a" class="flex-1"></select>
-      </div>
-      <div class="filter-row compare-row">
-        <label class="compare-label">Branch B:</label>
-        <select id="compare-branch-b" class="flex-1"></select>
-      </div>
-      <button class="btn" data-action="runCompare">Compare</button>
-    </div>
-    <div id="comparison-results"></div>
-    <div id="timeline-result" class="comparison-section timeline-section"></div>
-  </div>
-
-  <div id="tools-tab" class="tab-content">
-    <div class="tools-section">
-      <div class="tool-card">
-        <h3>📝 Batch Rename</h3>
-        <div class="batch-rename-form">
-          <input type="text" id="rename-pattern" placeholder="Pattern (regex)" value="feature/">
-          <input type="text" id="rename-replacement" placeholder="Replacement" value="feat/">
-          <button class="btn" data-action="batchRename">Preview Rename</button>
-        </div>
-        <p class="hint-text">
-          Use regex patterns to rename multiple branches. Example: <code>feature/</code> → <code>feat/</code>
-        </p>
-      </div>
-
-      <div class="tool-card">
-        <h3>🎯 Regex Branch Selection</h3>
-        <div class="filter-row">
-          <input type="text" id="regex-pattern" placeholder="Enter regex pattern" class="flex-1">
-          <button class="btn" data-action="selectByRegex">Select Matching</button>
-        </div>
-        <p class="hint-text">
-          Select branches matching a regex pattern. Example: <code>^feature/.*</code>
-        </p>
-      </div>
-
-      <div class="tool-card">
-        <h3>🤖 Auto-Cleanup Rules</h3>
-        <div id="rules-container"></div>
-        <div class="rule-actions">
-          <button class="btn" data-action="addCleanupRule">Add Rule</button>
-          <button class="btn btn-secondary" data-action="exportRules">Export to Clipboard</button>
-          <button class="btn btn-secondary" data-action="importRules">Import from Clipboard</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  ${showSponsorBanner ? `<div class="sponsor-banner" id="sponsor-banner">
-    <span>Find this useful?</span>
-    <a href="#" data-action="openSponsor">Sponsor on GitHub</a>
-    <button class="sponsor-dismiss" data-action="dismissSponsor" title="Dismiss">\u00d7</button>
-  </div>` : ''}
-
-  <div class="footer">
-    <a href="#" data-action="openSponsor">Sponsor</a>
-    <a href="#" data-action="openSupport">Buy Me a Coffee</a>
-    <a href="#" data-action="openGithub">Report Issue</a>
-  </div>
-
-  <script nonce="${nonce}">
-    const vscode = acquireVsCodeApi();
-
-    // HTML escape utility (client-side)
-    function escapeHtml(str) {
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-    }
-
-    // Regex validation utility (client-side)
-    function validateRegexPattern(pattern) {
-      if (pattern.length > 200) {
-        return { valid: false, error: 'Pattern too long (max 200 characters)' };
-      }
-
-      // Detect ReDoS-prone patterns
-      const dangerousPatterns = [
-        /\\([^)]*[+*]\\)[+*{]/,         // (x+)+, (x+)*, (x*)+, (x*)*
-        /\\([^|]*\\|[^)]*\\)[+*{]/,      // (a|b)+, (a|b)*
-        /\\.\\*\\.\\*/,                     // .*.* (multiple unbounded wildcards)
-      ];
-
-      for (const dangerous of dangerousPatterns) {
-        if (dangerous.test(pattern)) {
-          return {
-            valid: false,
-            error: 'Pattern contains quantifiers that may cause performance issues',
-          };
-        }
-      }
-
-      try {
-        new RegExp(pattern);
-        return { valid: true };
-      } catch (e) {
-        return {
-          valid: false,
-          error: 'Invalid regex: ' + e.message,
-        };
-      }
-    }
-
-    // Tab management
-    function showTab(tabName, clickedEl) {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      if (clickedEl) clickedEl.classList.add('active');
-      var tabEl = document.getElementById(tabName + '-tab');
-      if (tabEl) tabEl.classList.add('active');
-      vscode.setState({ activeTab: tabName });
-    }
-
-    var savedState = vscode.getState();
-    if (savedState && savedState.activeTab && savedState.activeTab !== 'branches') {
-      var tabBtn = document.querySelector('.tab[data-tab="' + savedState.activeTab + '"]');
-      showTab(savedState.activeTab, tabBtn);
-    }
-
-    // Branch actions
-    function deleteBranch(branch) {
-      vscode.postMessage({ command: 'delete', branch });
-    }
-
-    function switchTo(branch) {
-      vscode.postMessage({ command: 'switch', branch });
-    }
-
-    function addNote(branch) {
-      vscode.postMessage({ command: 'promptBranchNote', branch });
-    }
-
-    // Search — filter rows by name
-    function searchBranches(query) {
-      var q = query.toLowerCase();
-      document.querySelectorAll('.branch-row').forEach(function(row) {
-        var name = row.dataset.branch || '';
-        row.style.display = name.toLowerCase().includes(q) ? '' : 'none';
-      });
-    }
-
-    // Filter pills — toggle group visibility
-    function toggleFilter(el) {
-      el.classList.toggle('pill-on');
-      var group = el.dataset.filter;
-      var groupEl = document.querySelector('.branch-group[data-group="' + group + '"]');
-      if (groupEl) groupEl.style.display = el.classList.contains('pill-on') ? '' : 'none';
-    }
-
-    // Sort branches (re-order rows within each group)
-    function sortBranches() {
-      var sortBy = document.getElementById('sort-select').value;
-      document.querySelectorAll('.branch-group').forEach(function(group) {
-        var header = group.querySelector('.group-header');
-        var rows = Array.from(group.querySelectorAll('.branch-row'));
-        rows.sort(function(a, b) {
-          if (sortBy === 'name') {
-            return (a.dataset.branch || '').localeCompare(b.dataset.branch || '');
-          } else if (sortBy === 'age') {
-            var ageA = a.querySelector('.row-age');
-            var ageB = b.querySelector('.row-age');
-            var dA = parseInt((ageA ? ageA.textContent : '0').replace(/[^0-9]/g, '')) || 0;
-            var dB = parseInt((ageB ? ageB.textContent : '0').replace(/[^0-9]/g, '')) || 0;
-            return dB - dA;
-          }
-          // default: health — sort by health dot class
-          var hA = a.querySelector('.health-dot');
-          var hB = b.querySelector('.health-dot');
-          var order = { 'health-danger': 0, 'health-critical': 1, 'health-warning': 2, 'health-healthy': 3 };
-          var scoreA = 3, scoreB = 3;
-          if (hA) { for (var k in order) { if (hA.classList.contains(k)) { scoreA = order[k]; break; } } }
-          if (hB) { for (var k in order) { if (hB.classList.contains(k)) { scoreB = order[k]; break; } } }
-          return scoreA - scoreB;
-        });
-        rows.forEach(function(r) { group.appendChild(r); });
-      });
-    }
-
-    // Group checkbox — toggle all checkboxes in a group
-    function toggleGroup(groupId, checked) {
-      var group = document.querySelector('.branch-group[data-group="' + groupId + '"]');
-      if (group) group.querySelectorAll('.branch-checkbox').forEach(function(cb) { cb.checked = checked; });
-    }
-
-    // Delete selected within a group
-    function deleteGroupSelected(groupId) {
-      var group = document.querySelector('.branch-group[data-group="' + groupId + '"]');
-      if (!group) return;
-      var selected = Array.from(group.querySelectorAll('.branch-checkbox:checked')).map(function(cb) { return cb.dataset.branch; });
-      if (selected.length > 0) vscode.postMessage({ command: 'deleteMultiple', branches: selected });
-    }
-
-    // Remote branch actions
-    function deleteRemoteBranch(remote, branch) {
-      vscode.postMessage({ command: 'deleteRemote', remote, branch });
-    }
-
-    function deleteSelectedRemotes() {
-      const selected = Array.from(document.querySelectorAll('.remote-branch-checkbox:checked')).map(cb => ({
-        remote: cb.dataset.remote,
-        name: cb.dataset.branch
-      }));
-      if (selected.length > 0) {
-        vscode.postMessage({ command: 'deleteMultipleRemotes', branches: selected });
-      }
-    }
-
-    function toggleSelectAllRemotes(checked) {
-      document.querySelectorAll('.remote-branch-checkbox').forEach(cb => cb.checked = checked);
-    }
-
-    function selectMergedRemotes() {
-      const rows = document.querySelectorAll('tr[data-remote-branch]');
-      rows.forEach(row => {
-        const mergedCell = row.cells[3];
-        if (mergedCell && mergedCell.textContent.includes('✓')) {
-          row.querySelector('.remote-branch-checkbox').checked = true;
-        }
-      });
-    }
-
-    function selectGoneRemotes() {
-      const rows = document.querySelectorAll('tr[data-remote-branch]');
-      rows.forEach(row => {
-        const statusCell = row.cells[4];
-        if (statusCell && statusCell.textContent.includes('Gone')) {
-          row.querySelector('.remote-branch-checkbox').checked = true;
-        }
-      });
-    }
-
-    function clearRemoteSelection() {
-      document.querySelectorAll('.remote-branch-checkbox').forEach(cb => cb.checked = false);
-      document.getElementById('select-all-remotes').checked = false;
-    }
-
-    // Stash actions
-    function createStash() {
-      vscode.postMessage({ command: 'createStash' });
-    }
-
-    function applyStash(index) {
-      vscode.postMessage({ command: 'applyStash', index });
-    }
-
-    function popStash(index) {
-      vscode.postMessage({ command: 'popStash', index });
-    }
-
-    function dropStash(index) {
-      vscode.postMessage({ command: 'dropStash', index });
-    }
-
-    function clearAllStashes() {
-      vscode.postMessage({ command: 'clearStashes' });
-    }
-
-    // Worktree actions
-    function createWorktree() {
-      vscode.postMessage({ command: 'createWorktree' });
-    }
-
-    // Recovery actions
-    function restoreBranch(branchName, commitHash) {
-      vscode.postMessage({ command: 'restoreBranch', branchName, commitHash });
-    }
-
-    function dismissRecoveryEntry(branchName, commitHash) {
-      vscode.postMessage({ command: 'clearRecoveryEntry', branchName, commitHash });
-    }
-
-    // Tools actions
-    function batchRename() {
-      const pattern = document.getElementById('rename-pattern').value;
-      const replacement = document.getElementById('rename-replacement').value;
-      const selected = Array.from(document.querySelectorAll('.branch-checkbox:checked')).map(cb => cb.dataset.branch);
-
-      if (selected.length === 0) {
-        alert('Please select branches to rename');
-        return;
-      }
-
-      vscode.postMessage({ command: 'batchRename', pattern, replacement, branches: selected });
-    }
-
-    function selectByRegex() {
-      const pattern = document.getElementById('regex-pattern').value;
-      if (!pattern) return;
-
-      const validation = validateRegexPattern(pattern);
-      if (!validation.valid) {
-        alert('Invalid regex pattern: ' + validation.error);
-        return;
-      }
-
-      try {
-        const regex = new RegExp(pattern);
-        const rows = document.querySelectorAll('.branch-row');
-        rows.forEach(row => {
-          const branch = row.dataset.branch;
-          if (regex.test(branch)) {
-            const checkbox = row.querySelector('.branch-checkbox');
-            if (checkbox) checkbox.checked = true;
-          }
-        });
-      } catch (e) {
-        alert('Invalid regex pattern: ' + e.message);
-      }
-    }
-
-    // Cleanup rule rendering
-    function renderRules() {
-      const container = document.getElementById('rules-container');
-      if (!container) return;
-      container.innerHTML = '';
-
-      if (cleanupRules.length === 0) {
-        const p = document.createElement('p');
-        p.style.color = 'var(--vscode-descriptionForeground)';
-        p.textContent = 'No rules configured. Click Add Rule to create one.';
-        container.appendChild(p);
-        return;
-      }
-
-      cleanupRules.forEach(rule => {
-        const item = document.createElement('div');
-        item.className = 'rule-item';
-
-        const header = document.createElement('div');
-        header.className = 'rule-header';
-
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'rule-name';
-        nameSpan.textContent = rule.name;
-
-        const controls = document.createElement('div');
-
-        const toggleLabel = document.createElement('label');
-        toggleLabel.style.cssText = 'margin-right: 8px; font-size: 12px;';
-        const toggleInput = document.createElement('input');
-        toggleInput.type = 'checkbox';
-        toggleInput.checked = !!rule.enabled;
-        toggleInput.addEventListener('change', () => toggleRule(rule.id));
-        toggleLabel.appendChild(toggleInput);
-        toggleLabel.appendChild(document.createTextNode(' Enabled'));
-
-        const previewBtn = document.createElement('button');
-        previewBtn.className = 'action-btn';
-        previewBtn.textContent = 'Preview';
-        previewBtn.addEventListener('click', () => previewRule(rule.id));
-
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'action-btn';
-        deleteBtn.textContent = 'Delete';
-        deleteBtn.addEventListener('click', () => deleteRule(rule.id));
-
-        controls.appendChild(toggleLabel);
-        controls.appendChild(previewBtn);
-        controls.appendChild(deleteBtn);
-        header.appendChild(nameSpan);
-        header.appendChild(controls);
-
-        const conditionsDiv = document.createElement('div');
-        conditionsDiv.className = 'rule-conditions';
-        conditionsDiv.textContent = formatConditions(rule.conditions);
-
-        const previewDiv = document.createElement('div');
-        previewDiv.id = 'preview-' + rule.id;
-
-        item.appendChild(header);
-        item.appendChild(conditionsDiv);
-        item.appendChild(previewDiv);
-        container.appendChild(item);
-      });
-    }
-
-    function formatConditions(conditions) {
-      if (!conditions) return '(no conditions \u2014 matches all branches)';
-      const parts = [];
-      if (conditions.merged === true) parts.push('Is merged');
-      if (conditions.olderThanDays !== undefined && conditions.olderThanDays !== null) {
-        parts.push('Older than ' + conditions.olderThanDays + ' days');
-      }
-      if (conditions.pattern) parts.push('Name matches /' + conditions.pattern + '/');
-      if (conditions.noRemote === true) parts.push('No remote tracking branch');
-      return parts.length > 0 ? parts.join(' AND ') : '(no conditions \u2014 matches all branches)';
-    }
-
-    function addCleanupRule() {
-      const existing = document.getElementById('new-rule-form');
-      if (existing) {
-        existing.remove();
-        return;
-      }
-
-      const container = document.getElementById('rules-container');
-
-      const form = document.createElement('div');
-      form.id = 'new-rule-form';
-      form.style.cssText = 'background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 12px; margin-bottom: 8px;';
-
-      function makeRow(labelText, inputEl) {
-        const row = document.createElement('div');
-        row.className = 'filter-row';
-        row.style.marginBottom = '8px';
-        const lbl = document.createElement('label');
-        lbl.style.cssText = 'width: 160px; font-size: 12px;';
-        lbl.textContent = labelText;
-        row.appendChild(lbl);
-        row.appendChild(inputEl);
-        return row;
-      }
-
-      function makeCheckRow(labelText, inputId) {
-        const row = document.createElement('div');
-        row.className = 'filter-row';
-        row.style.marginBottom = '8px';
-        const lbl = document.createElement('label');
-        lbl.style.cssText = 'font-size: 12px;';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.id = inputId;
-        lbl.appendChild(cb);
-        lbl.appendChild(document.createTextNode(' ' + labelText));
-        row.appendChild(lbl);
-        return row;
-      }
-
-      const nameInput = document.createElement('input');
-      nameInput.type = 'text';
-      nameInput.id = 'new-rule-name';
-      nameInput.placeholder = 'e.g. Delete merged branches';
-      nameInput.style.flex = '1';
-      form.appendChild(makeRow('Rule name *', nameInput));
-
-      form.appendChild(makeCheckRow('Merged branches only', 'new-rule-merged'));
-
-      const daysInput = document.createElement('input');
-      daysInput.type = 'number';
-      daysInput.id = 'new-rule-days';
-      daysInput.placeholder = 'e.g. 30';
-      daysInput.min = '1';
-      daysInput.style.width = '100px';
-      form.appendChild(makeRow('Older than N days', daysInput));
-
-      const patternInput = document.createElement('input');
-      patternInput.type = 'text';
-      patternInput.id = 'new-rule-pattern';
-      patternInput.placeholder = 'e.g. ^feature/';
-      patternInput.style.flex = '1';
-      form.appendChild(makeRow('Name pattern (regex)', patternInput));
-
-      form.appendChild(makeCheckRow('No remote tracking branch', 'new-rule-no-remote'));
-
-      const errorDiv = document.createElement('div');
-      errorDiv.id = 'new-rule-error';
-      errorDiv.style.cssText = 'color: var(--vscode-errorForeground); font-size: 12px; margin-bottom: 8px; display: none;';
-      form.appendChild(errorDiv);
-
-      const btnRow = document.createElement('div');
-      btnRow.className = 'filter-row';
-      const saveBtn = document.createElement('button');
-      saveBtn.className = 'btn';
-      saveBtn.textContent = 'Save Rule';
-      saveBtn.addEventListener('click', saveNewRule);
-      const cancelBtn = document.createElement('button');
-      cancelBtn.className = 'btn';
-      cancelBtn.style.marginLeft = '8px';
-      cancelBtn.textContent = 'Cancel';
-      cancelBtn.addEventListener('click', cancelNewRule);
-      btnRow.appendChild(saveBtn);
-      btnRow.appendChild(cancelBtn);
-      form.appendChild(btnRow);
-
-      container.parentNode.insertBefore(form, container);
-    }
-
-    function saveNewRule() {
-      const nameInput = document.getElementById('new-rule-name');
-      const mergedInput = document.getElementById('new-rule-merged');
-      const daysInput = document.getElementById('new-rule-days');
-      const patternInput = document.getElementById('new-rule-pattern');
-      const noRemoteInput = document.getElementById('new-rule-no-remote');
-      const errorDiv = document.getElementById('new-rule-error');
-
-      const name = nameInput.value.trim();
-      const daysRaw = daysInput.value.trim();
-      const pattern = patternInput.value.trim();
-
-      const showError = (msg) => {
-        errorDiv.textContent = msg;
-        errorDiv.style.display = 'block';
-      };
-      errorDiv.style.display = 'none';
-
-      if (!name) {
-        showError('Rule name is required.');
-        return;
-      }
-
-      let olderThanDays;
-      if (daysRaw !== '') {
-        const parsed = parseInt(daysRaw, 10);
-        if (isNaN(parsed) || parsed <= 0 || String(parsed) !== daysRaw) {
-          showError('Days must be a positive integer.');
-          return;
-        }
-        olderThanDays = parsed;
-      }
-
-      if (pattern) {
-        const validation = validateRegexPattern(pattern);
-        if (!validation.valid) {
-          showError('Invalid pattern: ' + validation.error);
-          return;
-        }
-      }
-
-      const conditions = {};
-      if (mergedInput.checked) conditions.merged = true;
-      if (olderThanDays !== undefined) conditions.olderThanDays = olderThanDays;
-      if (pattern) conditions.pattern = pattern;
-      if (noRemoteInput.checked) conditions.noRemote = true;
-
-      const newRule = {
-        id: 'rule-' + Date.now(),
-        name,
-        enabled: true,
-        action: 'delete',
-        conditions,
-      };
-
-      vscode.postMessage({ command: 'saveCleanupRules', rules: [...cleanupRules, newRule] });
-    }
-
-    function cancelNewRule() {
-      const form = document.getElementById('new-rule-form');
-      if (form) form.remove();
-    }
-
-    function toggleRule(ruleId) {
-      const updated = cleanupRules.map(r => r.id === ruleId ? Object.assign({}, r, { enabled: !r.enabled }) : r);
-      vscode.postMessage({ command: 'saveCleanupRules', rules: updated });
-    }
-
-    function deleteRule(ruleId) {
-      const updated = cleanupRules.filter(r => r.id !== ruleId);
-      vscode.postMessage({ command: 'saveCleanupRules', rules: updated });
-    }
-
-    // Dry-run preview
-    var pendingPreviewRuleId = null;
-
-    function previewRule(ruleId) {
-      const rule = cleanupRules.find(r => r.id === ruleId);
-      if (!rule) return;
-      pendingPreviewRuleId = ruleId;
-      vscode.postMessage({ command: 'evaluateRule', rule: rule });
-    }
-
-    // Import/export clipboard
-    function exportRules() {
-      vscode.postMessage({ command: 'exportRules' });
-    }
-
-    function importRules() {
-      vscode.postMessage({ command: 'importRules' });
-    }
-
-    // Extension host message listener
-    window.addEventListener('message', function(event) {
-      const msg = event.data;
-      switch (msg.command) {
-        case 'ruleEvaluationResult': {
-          if (!pendingPreviewRuleId) break;
-          const previewDiv = document.getElementById('preview-' + pendingPreviewRuleId);
-          if (previewDiv) {
-            while (previewDiv.firstChild) previewDiv.removeChild(previewDiv.firstChild);
-            const matches = msg.matches;
-            if (!matches || matches.length === 0) {
-              const p = document.createElement('p');
-              p.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 6px;';
-              p.textContent = 'No branches match this rule';
-              previewDiv.appendChild(p);
-            } else {
-              const summary = document.createElement('p');
-              summary.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 6px;';
-              summary.textContent = matches.length + ' branch' + (matches.length !== 1 ? 'es' : '') + ' would be deleted:';
-              previewDiv.appendChild(summary);
-              const list = document.createElement('ul');
-              list.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 4px; padding-left: 20px;';
-              matches.forEach(function(name) {
-                const li = document.createElement('li');
-                li.textContent = name;
-                list.appendChild(li);
-              });
-              previewDiv.appendChild(list);
-            }
-          }
-          pendingPreviewRuleId = null;
-          break;
-        }
-
-        case 'comparisonResult': {
-          const resultsContainer = document.getElementById('comparison-results');
-          if (!resultsContainer) break;
-          while (resultsContainer.firstChild) resultsContainer.removeChild(resultsContainer.firstChild);
-
-          const data = msg.data;
-          if (!data) break;
-
-          // Ahead/behind summary
-          const summarySection = document.createElement('div');
-          summarySection.className = 'comparison-section';
-          const summaryH3 = document.createElement('h3');
-          summaryH3.textContent = data.branchA + ' vs ' + data.branchB;
-          summarySection.appendChild(summaryH3);
-          const summaryP = document.createElement('p');
-          summaryP.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 8px;';
-          summaryP.textContent = data.branchA + ' is ' + data.ahead + ' ahead and ' + data.behind + ' behind ' + data.branchB;
-          summarySection.appendChild(summaryP);
-          resultsContainer.appendChild(summarySection);
-
-          // Commits unique to branchA
-          if (data.commitsA && data.commitsA.length > 0) {
-            const sectionA = document.createElement('div');
-            sectionA.className = 'comparison-section';
-            const headA = document.createElement('h3');
-            headA.textContent = 'Commits unique to ' + data.branchA + ' (' + data.commitsA.length + ')';
-            sectionA.appendChild(headA);
-            renderCommits(data.commitsA, sectionA);
-            resultsContainer.appendChild(sectionA);
-          }
-
-          // Commits unique to branchB
-          if (data.commitsB && data.commitsB.length > 0) {
-            const sectionB = document.createElement('div');
-            sectionB.className = 'comparison-section';
-            const headB = document.createElement('h3');
-            headB.textContent = 'Commits unique to ' + data.branchB + ' (' + data.commitsB.length + ')';
-            sectionB.appendChild(headB);
-            renderCommits(data.commitsB, sectionB);
-            resultsContainer.appendChild(sectionB);
-          }
-
-          // Changed files
-          if (data.files && data.files.length > 0) {
-            const filesSection = document.createElement('div');
-            filesSection.className = 'comparison-section';
-            const filesH3 = document.createElement('h3');
-            filesH3.textContent = 'Changed files (' + data.files.length + ')';
-            filesSection.appendChild(filesH3);
-            renderFileChanges(data.files, filesSection, data.branchA, data.branchB);
-            resultsContainer.appendChild(filesSection);
-          }
-
-          if ((!data.commitsA || data.commitsA.length === 0) && (!data.commitsB || data.commitsB.length === 0) && (!data.files || data.files.length === 0)) {
-            const noDiffP = document.createElement('p');
-            noDiffP.style.cssText = 'font-size: 12px; color: var(--vscode-descriptionForeground);';
-            noDiffP.textContent = 'No differences found between the two branches.';
-            resultsContainer.appendChild(noDiffP);
-          }
-
-          // Request timeline for branchA after comparison results are rendered
-          vscode.postMessage({ command: 'getTimeline', branchName: data.branchA });
-          break;
-        }
-
-        case 'prStatusUpdate': {
-          var prData = msg.data;
-          for (var branchName in prData) {
-            if (!prData.hasOwnProperty(branchName)) continue;
-            var pr = prData[branchName];
-            var row = document.querySelector('.branch-row[data-branch="' + CSS.escape(branchName) + '"]');
-            if (row) {
-              var rowInfo = row.querySelector('.row-info');
-              if (rowInfo && !rowInfo.querySelector('.pr-badge')) {
-                var badge = document.createElement('span');
-                badge.className = 'pr-badge';
-                badge.title = pr.title;
-                badge.textContent = 'pr-' + pr.number;
-                badge.dataset.action = 'openUrl';
-                badge.dataset.url = pr.url;
-                rowInfo.appendChild(badge);
-              }
-            }
-          }
-          break;
-        }
-
-        case 'timelineResult': {
-          const data = msg.data;
-          if (!data || !data.commits || data.commits.length === 0) break;
-          const timelineContainer = document.getElementById('timeline-result');
-          if (!timelineContainer) break;
-          while (timelineContainer.firstChild) timelineContainer.removeChild(timelineContainer.firstChild);
-          const heading = document.createElement('h3');
-          heading.textContent = 'Recent commits on ' + String(data.branchName);
-          timelineContainer.appendChild(heading);
-          renderCommits(data.commits, timelineContainer);
-          break;
-        }
-      }
-    });
-
-    // General actions
-    function refresh() {
-      vscode.postMessage({ command: 'refresh' });
-    }
-
-    // Event delegation — replaces all inline onclick/onchange handlers for CSP compliance
-    document.addEventListener('click', function(e) {
-      var el = e.target.closest('[data-action]');
-      if (!el || el.disabled) return;
-      var action = el.dataset.action;
-      switch (action) {
-        case 'deleteBranch': deleteBranch(el.dataset.branch); break;
-        case 'switchTo': switchTo(el.dataset.branch); break;
-        case 'addNote': addNote(el.dataset.branch); break;
-        case 'deleteRemoteBranch': deleteRemoteBranch(el.dataset.remote, el.dataset.branch); break;
-        case 'applyStash': applyStash(parseInt(el.dataset.index)); break;
-        case 'popStash': popStash(parseInt(el.dataset.index)); break;
-        case 'dropStash': dropStash(parseInt(el.dataset.index)); break;
-        case 'restoreBranch': restoreBranch(el.dataset.branch, el.dataset.hash); break;
-        case 'dismissRecoveryEntry': dismissRecoveryEntry(el.dataset.branch, el.dataset.hash); break;
-        case 'showTab': showTab(el.dataset.tab, el); break;
-        case 'refresh': refresh(); break;
-        case 'createBranch': vscode.postMessage({ command: 'createBranch' }); break;
-        case 'switchRepository': vscode.postMessage({ command: 'switchRepository' }); break;
-        case 'toggleFilter': toggleFilter(el); break;
-        case 'deleteGroupSelected': deleteGroupSelected(el.dataset.group); break;
-        case 'openUrl': if (el.dataset.url) vscode.postMessage({ command: 'openUrl', url: el.dataset.url }); break;
-        case 'deleteSelectedRemotes': deleteSelectedRemotes(); break;
-        case 'selectMergedRemotes': selectMergedRemotes(); break;
-        case 'selectGoneRemotes': selectGoneRemotes(); break;
-        case 'clearRemoteSelection': clearRemoteSelection(); break;
-        case 'createWorktree': createWorktree(); break;
-        case 'createStash': createStash(); break;
-        case 'clearAllStashes': clearAllStashes(); break;
-        case 'runCompare': runCompare(); break;
-        case 'batchRename': batchRename(); break;
-        case 'selectByRegex': selectByRegex(); break;
-        case 'addCleanupRule': addCleanupRule(); break;
-        case 'exportRules': exportRules(); break;
-        case 'importRules': importRules(); break;
-        case 'openSupport': vscode.postMessage({ command: 'openSupport' }); break;
-        case 'openSponsor': vscode.postMessage({ command: 'openSponsor' }); break;
-        case 'openGithub': vscode.postMessage({ command: 'openGithub' }); break;
-        case 'dismissSponsor':
-          vscode.postMessage({ command: 'dismissSponsor' });
-          var banner = document.getElementById('sponsor-banner');
-          if (banner) banner.remove();
-          break;
-      }
-    });
-    // Handle checkbox/select change events via delegation
-    document.addEventListener('change', function(e) {
-      var el = e.target.closest('[data-action]');
-      if (!el) return;
-      var action = el.dataset.action;
-      if (action === 'toggleGroup') toggleGroup(el.dataset.group, el.checked);
-      if (action === 'toggleSelectAllRemotes') toggleSelectAllRemotes(el.checked);
-      if (action === 'sortBranches') sortBranches();
-    });
-
-    // Search input listener
-    var searchInput = document.getElementById('branch-search');
-    if (searchInput) searchInput.addEventListener('input', function(e) { searchBranches(e.target.value); });
-
-    // Load cleanup rules
-    const cleanupRules = ${rulesJson};
-    renderRules();
-
-    // Load branch names for compare dropdowns
-    const allBranchNames = ${JSON.stringify(allBranchNames).replace(/</g, '\\u003c')};
-    const currentBranchName = ${JSON.stringify(currentBranch ?? '').replace(/</g, '\\u003c')};
-    initCompareDropdowns();
-
-    function initCompareDropdowns() {
-      const selectA = document.getElementById('compare-branch-a');
-      const selectB = document.getElementById('compare-branch-b');
-      if (!selectA || !selectB) return;
-
-      allBranchNames.forEach(function(name) {
-        const optA = document.createElement('option');
-        optA.textContent = name;
-        optA.value = name;
-        if (name === currentBranchName) optA.selected = true;
-        selectA.appendChild(optA);
-
-        const optB = document.createElement('option');
-        optB.textContent = name;
-        optB.value = name;
-        selectB.appendChild(optB);
-      });
-    }
-
-    function runCompare() {
-      const selectA = document.getElementById('compare-branch-a');
-      const selectB = document.getElementById('compare-branch-b');
-      if (!selectA || !selectB) return;
-      const branch1 = selectA.value;
-      const branch2 = selectB.value;
-      if (!branch1 || !branch2) return;
-      vscode.postMessage({ command: 'compareBranches', branch1, branch2 });
-    }
-
-    function renderCommits(commits, container) {
-      commits.forEach(function(c) {
-        const row = document.createElement('div');
-        row.className = 'commit-row';
-        const hashSpan = document.createElement('code');
-        hashSpan.className = 'commit-hash';
-        hashSpan.textContent = c.hash;
-        const textSpan = document.createElement('span');
-        textSpan.textContent = ' ' + c.message + ' \u2014 ' + c.author + ', ' + c.date;
-        row.appendChild(hashSpan);
-        row.appendChild(textSpan);
-        container.appendChild(row);
-      });
-    }
-
-    function renderFileChanges(files, container, branchA, branchB) {
-      files.forEach(function(f) {
-        const row = document.createElement('div');
-        row.className = 'file-change-row';
-        const badge = document.createElement('span');
-        badge.className = 'status-badge status-' + (f.status || '').toLowerCase();
-        badge.textContent = f.status || '?';
-        const pathSpan = document.createElement('span');
-        pathSpan.className = 'file-path';
-        pathSpan.textContent = f.path;
-        row.appendChild(badge);
-        row.appendChild(pathSpan);
-        if (branchA && branchB) {
-          const diffBtn = document.createElement('button');
-          diffBtn.className = 'action-btn';
-          diffBtn.textContent = 'Diff';
-          diffBtn.addEventListener('click', function() {
-            vscode.postMessage({
-              command: 'openDiff',
-              branchA: branchA,
-              branchB: branchB,
-              filePath: f.path
-            });
-          });
-          row.appendChild(diffBtn);
-        }
-        container.appendChild(row);
-      });
-    }
-  </script>
+  <div id="root"></div>
+  <script nonce="${nonce}">window.INITIAL_DATA=${initialDataJson};</script>
+  <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
 }
+
 
 /**
  * Checks review request eligibility and shows dialog if appropriate.

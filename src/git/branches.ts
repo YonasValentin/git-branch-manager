@@ -1,14 +1,9 @@
 import * as vscode from 'vscode';
-import { gitCommand, execFile, getCurrentBranch, getBaseBranch } from './core';
+import { gitCommand, execFile, getCurrentBranch, getBaseBranch, buildGitEnv } from './core';
 import { calculateHealthScore, getHealthStatus, getHealthReason, extractIssueFromBranch } from './health';
 import { BranchInfo, RemoteBranchInfo, ComparisonResult, CommitInfo, FileChange } from '../types';
+import { parseGitCommitLog } from '../internals/parseGitCommitLog';
 
-/**
- * Retrieves branch information with health metrics.
- * Uses batch git queries for optimal performance.
- * @param cwd - Working directory
- * @returns Array of branch information with health scores
- */
 export async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
   const branches: BranchInfo[] = [];
 
@@ -45,16 +40,18 @@ export async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
       for (const line of refOutput.split('\n')) {
         if (!line) continue;
         const parts = line.split('\0');
+        const [name, ts, author, track] = parts;
+        if (!name) continue;
         if (parts.length >= 4) {
-          branchDataMap.set(parts[0], {
-            timestamp: parseInt(parts[1]) || 0,
-            author: parts[2] || '',
-            trackingStatus: parts[3] || '',
+          branchDataMap.set(name, {
+            timestamp: parseInt(ts ?? '') || 0,
+            author: author ?? '',
+            trackingStatus: track ?? '',
           });
         } else if (parts.length === 3) {
-          branchDataMap.set(parts[0], {
-            timestamp: parseInt(parts[1]) || 0,
-            author: parts[2] || '',
+          branchDataMap.set(name, {
+            timestamp: parseInt(ts ?? '') || 0,
+            author: author ?? '',
             trackingStatus: '',
           });
         }
@@ -72,7 +69,8 @@ export async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
         const match = line.match(/^\*?\s+(\S+)\s+\S+\s+\[([^\]]+)\]/);
         if (match) {
           const [, name, ref] = match;
-          trackingInfo.set(name, { remote: ref.split(':')[0], gone: ref.includes(': gone') });
+          if (!name || !ref) continue;
+          trackingInfo.set(name, { remote: ref.split(':')[0] ?? ref, gone: ref.includes(': gone') });
         }
       }
     } catch {}
@@ -95,7 +93,7 @@ export async function getBranchInfo(cwd: string): Promise<BranchInfo[]> {
               cwd
             );
             const [behindStr, aheadStr] = revList.split('\t');
-            return { branch, behind: parseInt(behindStr) || 0, ahead: parseInt(aheadStr) || 0 };
+            return { branch, behind: parseInt(behindStr ?? '') || 0, ahead: parseInt(aheadStr ?? '') || 0 };
           } catch {
             return { branch, behind: 0, ahead: 0 };
           }
@@ -201,7 +199,7 @@ export async function getRemoteBranchInfo(cwd: string): Promise<RemoteBranchInfo
       for (const line of refOutput.split('\n')) {
         if (!line) continue;
         const [refName, ts] = line.split('\0');
-        if (refName) remoteDataMap.set(refName, parseInt(ts) || 0);
+        if (refName) remoteDataMap.set(refName, parseInt(ts ?? '') || 0);
       }
     } catch (err) {
       console.warn('for-each-ref unavailable for remotes:', err);
@@ -216,7 +214,7 @@ export async function getRemoteBranchInfo(cwd: string): Promise<RemoteBranchInfo
       const [remote, ...nameParts] = remoteBranch.split('/');
       const branchName = nameParts.join('/');
 
-      if (!branchName || protectedSet.has(branchName)) continue;
+      if (!remote || !branchName || protectedSet.has(branchName)) continue;
 
       let daysOld = 0;
       let lastCommitDate: Date | undefined;
@@ -323,8 +321,8 @@ export async function compareBranches(cwd: string, branchA: string, branchB: str
       cwd
     );
     const [behindStr, aheadStr] = countOutput.split('\t');
-    result.behind = parseInt(behindStr) || 0;
-    result.ahead = parseInt(aheadStr) || 0;
+    result.behind = parseInt(behindStr ?? '') || 0;
+    result.ahead = parseInt(aheadStr ?? '') || 0;
 
     // Get merge base
     try {
@@ -340,12 +338,9 @@ export async function compareBranches(cwd: string, branchA: string, branchB: str
       const { stdout: commitsA } = await execFile(
         'git',
         ['log', `${branchB}..${branchA}`, '--pretty=format:%h%x00%s%x00%an%x00%cr', '--reverse'],
-        { cwd, maxBuffer: 1024 * 1024 }
+        { cwd, maxBuffer: 1024 * 1024, env: buildGitEnv() }
       );
-      result.commitsA = commitsA.trim().split('\n').filter((l: string) => l).map((line: string) => {
-        const [hash, message, author, date] = line.split('\0');
-        return { hash, message, author, date, daysOld: 0 };
-      });
+      result.commitsA = parseGitCommitLog(commitsA);
     }
 
     // Get commits unique to branchB (behind commits)
@@ -353,23 +348,21 @@ export async function compareBranches(cwd: string, branchA: string, branchB: str
       const { stdout: commitsB } = await execFile(
         'git',
         ['log', `${branchA}..${branchB}`, '--pretty=format:%h%x00%s%x00%an%x00%cr', '--reverse'],
-        { cwd, maxBuffer: 1024 * 1024 }
+        { cwd, maxBuffer: 1024 * 1024, env: buildGitEnv() }
       );
-      result.commitsB = commitsB.trim().split('\n').filter((l: string) => l).map((line: string) => {
-        const [hash, message, author, date] = line.split('\0');
-        return { hash, message, author, date, daysOld: 0 };
-      });
+      result.commitsB = parseGitCommitLog(commitsB);
     }
 
     // Get file changes between branches
     const { stdout: filesOutput } = await execFile(
       'git',
       ['diff', '--name-status', `${branchB}..${branchA}`],
-      { cwd, maxBuffer: 1024 * 1024 }
+      { cwd, maxBuffer: 1024 * 1024, env: buildGitEnv() }
     );
-    result.files = filesOutput.trim().split('\n').filter((l: string) => l).map((line: string) => {
+    result.files = filesOutput.trim().split('\n').filter((l: string) => l).flatMap((line: string): FileChange[] => {
       const [status, ...pathParts] = line.split('\t');
-      return { status: status.charAt(0) as 'A' | 'M' | 'D' | 'R', path: pathParts.join('\t') };
+      if (!status) return [];
+      return [{ status: status.charAt(0) as 'A' | 'M' | 'D' | 'R', path: pathParts.join('\t') }];
     });
 
   } catch (error) {
@@ -391,12 +384,9 @@ export async function getBranchTimeline(cwd: string, branchName: string, limit: 
     const { stdout } = await execFile(
       'git',
       ['log', branchName, `--max-count=${limit}`, '--pretty=format:%h%x00%s%x00%an%x00%cr'],
-      { cwd, maxBuffer: 1024 * 1024 }
+      { cwd, maxBuffer: 1024 * 1024, env: buildGitEnv() }
     );
-    return stdout.trim().split('\n').filter((l: string) => l).map((line: string) => {
-      const [hash, message, author, date] = line.split('\0');
-      return { hash, message, author, date, daysOld: 0 };
-    });
+    return parseGitCommitLog(stdout);
   } catch {
     return [];
   }

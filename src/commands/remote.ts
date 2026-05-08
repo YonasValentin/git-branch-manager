@@ -76,11 +76,12 @@ export async function cleanRemoteBranches(repoContext: RepositoryContextManager,
   if (confirm !== 'Delete') return;
 
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: 'Deleting remote branches' },
-    async (progress) => {
+    { location: vscode.ProgressLocation.Notification, title: 'Deleting remote branches', cancellable: true },
+    async (progress, token) => {
       let deleted = 0, failed = 0;
 
       for (const branch of toDelete) {
+        if (token.isCancellationRequested) break;
         progress.report({ increment: 100 / toDelete.length, message: branch.name });
 
         try {

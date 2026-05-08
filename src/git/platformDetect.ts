@@ -46,7 +46,7 @@ export async function detectPlatform(cwd: string): Promise<PlatformInfo> {
 
     // 1. GitHub — SSH (git@github.com:owner/repo) or HTTPS (https://github.com/owner/repo)
     const githubMatch = url.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
-    if (githubMatch) {
+    if (githubMatch && githubMatch[1] && githubMatch[2]) {
       return {
         platform: 'github',
         owner: githubMatch[1],
@@ -56,7 +56,7 @@ export async function detectPlatform(cwd: string): Promise<PlatformInfo> {
 
     // 2. Azure DevOps new HTTPS — https://dev.azure.com/org/project/_git/repo
     const azureNewMatch = url.match(/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/.]+)/);
-    if (azureNewMatch) {
+    if (azureNewMatch && azureNewMatch[1] && azureNewMatch[2] && azureNewMatch[3]) {
       return {
         platform: 'azure',
         organization: azureNewMatch[1],
@@ -67,7 +67,7 @@ export async function detectPlatform(cwd: string): Promise<PlatformInfo> {
 
     // 3. Azure DevOps old HTTPS — https://org.visualstudio.com/project/_git/repo
     const azureOldMatch = url.match(/([^.]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/.]+)/);
-    if (azureOldMatch) {
+    if (azureOldMatch && azureOldMatch[1] && azureOldMatch[2] && azureOldMatch[3]) {
       return {
         platform: 'azure',
         organization: azureOldMatch[1],
@@ -78,7 +78,7 @@ export async function detectPlatform(cwd: string): Promise<PlatformInfo> {
 
     // 4. Azure DevOps SSH — git@ssh.dev.azure.com:v3/org/project/repo
     const azureSshMatch = url.match(/ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/.]+)/);
-    if (azureSshMatch) {
+    if (azureSshMatch && azureSshMatch[1] && azureSshMatch[2] && azureSshMatch[3]) {
       return {
         platform: 'azure',
         organization: azureSshMatch[1],
@@ -89,7 +89,7 @@ export async function detectPlatform(cwd: string): Promise<PlatformInfo> {
 
     // 5. GitLab SSH — git@gitlab.com:namespace/repo (or self-hosted)
     const gitlabSshMatch = url.match(/git@([^:]+):([^/]+)\/([^/.]+)/);
-    if (gitlabSshMatch) {
+    if (gitlabSshMatch && gitlabSshMatch[1] && gitlabSshMatch[2] && gitlabSshMatch[3]) {
       const gitlabHost = gitlabSshMatch[1];
       const ns = gitlabSshMatch[2];
       const proj = gitlabSshMatch[3].replace(/\.git$/, '');
@@ -103,7 +103,7 @@ export async function detectPlatform(cwd: string): Promise<PlatformInfo> {
     // 6. GitLab HTTPS fallback — https://gitlab.com/namespace/repo (or self-hosted)
     //    Excludes github.com and Azure hosts already matched above.
     const gitlabHttpsMatch = url.match(/https?:\/\/([^/]+)\/([^/]+)\/([^/.]+)/);
-    if (gitlabHttpsMatch) {
+    if (gitlabHttpsMatch && gitlabHttpsMatch[1] && gitlabHttpsMatch[2] && gitlabHttpsMatch[3]) {
       const gitlabHost = gitlabHttpsMatch[1];
       // Skip hosts already handled by GitHub/Azure matchers
       if (!gitlabHost.includes('github.com') && !gitlabHost.includes('dev.azure.com') && !gitlabHost.includes('visualstudio.com')) {

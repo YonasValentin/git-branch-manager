@@ -98,7 +98,7 @@ export class GoneDetector implements vscode.Disposable {
       .get<string>('goneBranchAction', 'prompt');
 
     const msg =
-      newlyGone.length === 1
+      newlyGone.length === 1 && newlyGone[0]
         ? `Branch "${newlyGone[0].name}" is orphaned — remote was deleted`
         : `${newlyGone.length} branches are orphaned — their remotes were deleted`;
 
@@ -137,13 +137,19 @@ export class GoneDetector implements vscode.Disposable {
     repoPath: string,
     goneBranches: BranchInfo[]
   ): Promise<void> {
-    const items = goneBranches.map(b => ({
+    // Attach the BranchInfo to each item so we can recover the actual branch
+    // ref directly without parsing it back out of a decorated label.
+    interface GoneQuickPickItem extends vscode.QuickPickItem {
+      branch: BranchInfo;
+    }
+    const items: GoneQuickPickItem[] = goneBranches.map(b => ({
       label: `$(git-branch) ${b.name}`,
       description: b.trackingBranch ? `was tracking ${b.trackingBranch}` : 'remote gone',
       picked: true,
+      branch: b,
     }));
 
-    const selected = await vscode.window.showQuickPick(items, {
+    const selected = await vscode.window.showQuickPick<GoneQuickPickItem>(items, {
       placeHolder: 'Select orphaned branches to delete (all pre-selected)',
       canPickMany: true,
     });
@@ -152,9 +158,7 @@ export class GoneDetector implements vscode.Disposable {
       return;
     }
 
-    // Match selected items back to BranchInfo objects by branch name
-    const selectedNames = new Set(selected.map(s => s.label.replace(/^\$\(git-branch\) /, '')));
-    const toDelete = goneBranches.filter(b => selectedNames.has(b.name));
+    const toDelete = selected.map(s => s.branch);
 
     await this.deleteBranches(repoPath, toDelete);
     this.treeProvider.scheduleRefresh();

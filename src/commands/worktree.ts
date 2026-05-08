@@ -40,7 +40,7 @@ export async function createWorktreeFromBranch(repoContext: RepositoryContextMan
   if (!worktreePath) return;
 
   try {
-    await gitCommand(['worktree', 'add', worktreePath, selected.branch.name], gitRoot);
+    await gitCommand(['worktree', 'add', '--', worktreePath, selected.branch.name], gitRoot);
 
     const openInNewWindow = await vscode.window.showInformationMessage(
       `Worktree created at ${worktreePath}`,

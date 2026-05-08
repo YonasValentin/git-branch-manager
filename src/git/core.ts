@@ -1,32 +1,43 @@
 import * as cp from 'child_process';
 import { promisify } from 'util';
+import { buildGitEnv } from '../internals/gitEnv';
 
-/**
- * Promisified execFile for secure git command execution.
- */
 const execFileAsync = promisify(cp.execFile);
 
 /**
- * Executes a git command securely using execFile (no shell interpretation).
- * @security Arguments passed as array, preventing shell injection.
- * @param args - Git command arguments, e.g. ['branch', '-D', '--', branchName]
- * @param cwd - Working directory
- * @returns stdout trimmed
+ * Error class that carries through git's own stderr message instead of the
+ * opaque "spawn ENOENT" / "Command failed" wrapper Node provides.
  */
-export async function gitCommand(args: string[], cwd: string): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, { cwd });
-  return stdout.trim();
+export class GitCommandError extends Error {
+  constructor(message: string, public readonly stderr: string, public readonly exitCode?: number) {
+    super(message);
+    this.name = 'GitCommandError';
+  }
 }
 
-/**
- * Export execFile for callers that need full {stdout, stderr} object.
- */
-export { execFileAsync as execFile };
+// @throws {GitCommandError} on non-zero exit, carrying git's stderr
+export async function gitCommand(args: string[], cwd: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('git', args, {
+      cwd,
+      env: buildGitEnv(),
+    });
+    return stdout.trim();
+  } catch (err) {
+    const e = err as { stderr?: unknown; message?: string; code?: number };
+    const stderr = typeof e.stderr === 'string' ? e.stderr.trim() : '';
+    const exitCode = typeof e.code === 'number' ? e.code : undefined;
+    // Prefer git's own stderr ("would clobber", "needs merge", etc.) over
+    // Node's "Command failed" wrapper.
+    const message = stderr || e.message || 'git command failed';
+    throw new GitCommandError(message, stderr, exitCode);
+  }
+}
 
-/**
- * Gets the Git root directory for the current workspace.
- * @returns The Git root path or undefined
- */
+// Raw execFile — callers must pass env: buildGitEnv() themselves.
+export { execFileAsync as execFile };
+export { buildGitEnv };
+
 export async function getGitRoot(workspacePath: string): Promise<string | undefined> {
   try {
     return await gitCommand(['rev-parse', '--show-toplevel'], workspacePath);
@@ -35,20 +46,10 @@ export async function getGitRoot(workspacePath: string): Promise<string | undefi
   }
 }
 
-/**
- * Gets the current branch name.
- * @param cwd - Working directory
- * @returns Current branch name
- */
 export async function getCurrentBranch(cwd: string): Promise<string> {
   return await gitCommand(['branch', '--show-current'], cwd);
 }
 
-/**
- * Determines the base branch for merge comparisons.
- * @param cwd - Working directory
- * @returns Base branch name (main, master, etc.)
- */
 export async function getBaseBranch(cwd: string): Promise<string> {
   try {
     const stdout = await gitCommand(['symbolic-ref', 'refs/remotes/origin/HEAD'], cwd);
@@ -58,18 +59,13 @@ export async function getBaseBranch(cwd: string): Promise<string> {
       const stdout = await gitCommand(['branch', '-r'], cwd);
       if (stdout.includes('origin/main')) return 'main';
       if (stdout.includes('origin/master')) return 'master';
-    } catch {
-      // No remote branches available
-    }
-    // Fallback: check local branches
+    } catch {}
     try {
       const local = await gitCommand(['branch', '--format=%(refname:short)'], cwd);
       const localBranches = local.split('\n').map(b => b.trim()).filter(Boolean);
       if (localBranches.includes('main')) return 'main';
       if (localBranches.includes('master')) return 'master';
-    } catch {
-      // No local branches available
-    }
+    } catch {}
     return 'main';
   }
 }

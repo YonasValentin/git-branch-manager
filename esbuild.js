@@ -5,7 +5,6 @@ const watch = process.argv.includes('--watch');
 
 const esbuildProblemMatcherPlugin = {
 	name: 'esbuild-problem-matcher',
-
 	setup(build) {
 		build.onStart(() => {
 			console.log('[watch] build started');
@@ -21,10 +20,9 @@ const esbuildProblemMatcherPlugin = {
 };
 
 async function main() {
-	const ctx = await esbuild.context({
-		entryPoints: [
-			'src/extension.ts'
-		],
+	// Extension host bundle (Node.js)
+	const extCtx = await esbuild.context({
+		entryPoints: ['src/extension.ts'],
 		bundle: true,
 		format: 'cjs',
 		minify: production,
@@ -34,15 +32,35 @@ async function main() {
 		outfile: 'dist/extension.js',
 		external: ['vscode'],
 		logLevel: 'silent',
-		plugins: [
-			esbuildProblemMatcherPlugin,
-		],
+		plugins: [esbuildProblemMatcherPlugin],
 	});
+
+	// Webview bundle (browser IIFE — React bundled in, no CDN)
+	const webCtx = await esbuild.context({
+		entryPoints: ['src/webview/index.tsx'],
+		bundle: true,
+		format: 'iife',
+		minify: production,
+		sourcemap: !production,
+		sourcesContent: false,
+		platform: 'browser',
+		outfile: 'dist/webview.js',
+		jsx: 'automatic',
+		logLevel: 'silent',
+		legalComments: production ? 'none' : 'inline',
+		define: {
+			'process.env.NODE_ENV': JSON.stringify(production ? 'production' : 'development'),
+		},
+		plugins: [esbuildProblemMatcherPlugin],
+	});
+
 	if (watch) {
-		await ctx.watch();
+		await Promise.all([extCtx.watch(), webCtx.watch()]);
 	} else {
-		await ctx.rebuild();
-		await ctx.dispose();
+		await extCtx.rebuild();
+		await extCtx.dispose();
+		await webCtx.rebuild();
+		await webCtx.dispose();
 	}
 }
 

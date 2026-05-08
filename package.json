@@ -2,7 +2,7 @@
   "name": "git-branch-manager-pro",
   "displayName": "Git Branch Manager - Clean & Organize",
   "description": "Clean up old and merged Git branches with one click. Dashboard view, bulk delete, branch templates.",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "publisher": "yonasvalentinmougaardkristensen",
   "engines": {
     "vscode": "^1.74.0"
@@ -78,68 +78,83 @@
       {
         "command": "git-branch-manager.cleanup",
         "title": "Git Branch Manager: Show Branch Cleaner",
-        "icon": "$(git-branch)"
+        "icon": "$(git-branch)",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.quickCleanup",
-        "title": "Git Branch Manager: Quick Clean Merged Branches"
+        "title": "Git Branch Manager: Quick Clean Merged Branches",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.createBranch",
         "title": "Git Branch Manager: Create Branch from Template",
-        "icon": "$(add)"
+        "icon": "$(add)",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.cleanRemotes",
-        "title": "Git Branch Manager: Clean Remote Branches"
+        "title": "Git Branch Manager: Clean Remote Branches",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.manageWorktrees",
-        "title": "Git Branch Manager: Manage Worktrees"
+        "title": "Git Branch Manager: Manage Worktrees",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.createWorktree",
-        "title": "Git Branch Manager: Create Worktree"
+        "title": "Git Branch Manager: Create Worktree",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.stash",
-        "title": "Git Branch Manager: Quick Stash"
+        "title": "Git Branch Manager: Quick Stash",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.stashPop",
-        "title": "Git Branch Manager: Pop Latest Stash"
+        "title": "Git Branch Manager: Pop Latest Stash",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.undoDelete",
-        "title": "Git Branch Manager: Undo Delete (Restore Last Deleted Branch)"
+        "title": "Git Branch Manager: Undo Delete (Restore Last Deleted Branch)",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.treeDeleteBranch",
         "title": "Delete Branch",
-        "icon": "$(trash)"
+        "icon": "$(trash)",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.treeSwitchBranch",
         "title": "Switch to Branch",
-        "icon": "$(arrow-swap)"
+        "icon": "$(arrow-swap)",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.treeCompareBranch",
         "title": "Compare with Current",
-        "icon": "$(diff)"
+        "icon": "$(diff)",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.refreshTree",
         "title": "Refresh Branches",
-        "icon": "$(refresh)"
+        "icon": "$(refresh)",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.loadMoreBranches",
-        "title": "Load More Branches"
+        "title": "Load More Branches",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.cleanGoneBranches",
-        "title": "Git Branch Manager: Clean Gone Branches"
+        "title": "Git Branch Manager: Clean Gone Branches",
+        "category": "Git Branch Manager"
       },
       {
         "command": "git-branch-manager.connectPlatform",
@@ -188,7 +203,7 @@
         },
         {
           "command": "git-branch-manager.openPR",
-          "when": "view == git-branch-manager.branchTree && viewItem == branch",
+          "when": "view == git-branch-manager.branchTree && (viewItem == branch || viewItem == currentBranch)",
           "group": "2_pr@1"
         }
       ],
@@ -291,6 +306,9 @@
         },
         "gitBranchManager.protectedBranches": {
           "type": "array",
+          "items": {
+            "type": "string"
+          },
           "default": [
             "main",
             "master",
@@ -314,14 +332,14 @@
             "notify-only"
           ],
           "enumItemLabels": [
-            "Prompt — ask before deleting",
+            "Prompt \u2014 ask before deleting",
             "Auto-delete silently",
-            "Notify only — no action"
+            "Notify only \u2014 no action"
           ],
           "markdownEnumDescriptions": [
             "Show a notification with action buttons when orphaned branches are detected after fetch.",
             "Automatically delete orphaned branches after every fetch without prompting. Branches are logged to recovery.",
-            "Show a passive notification only — take no cleanup action."
+            "Show a passive notification only \u2014 take no cleanup action."
           ],
           "default": "prompt",
           "description": "Action to take when branches tracking deleted remotes are detected after fetch"
@@ -380,21 +398,28 @@
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.webview.json",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest"
   },
   "devDependencies": {
-    "@types/vscode": "^1.74.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "16.x",
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1",
+    "@types/vscode": "^1.74.0",
     "@typescript-eslint/eslint-plugin": "^8.31.1",
     "@typescript-eslint/parser": "^8.31.1",
-    "eslint": "^9.25.1",
-    "esbuild": "^0.25.3",
-    "npm-run-all": "^4.1.5",
-    "typescript": "^4.9.4",
     "@vscode/test-cli": "^0.0.11",
-    "@vscode/test-electron": "^2.5.2"
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.25.3",
+    "eslint": "^9.25.1",
+    "npm-run-all": "^4.1.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^4.9.4",
+    "vitest": "^1.6.1"
   }
 }

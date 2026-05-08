@@ -19,8 +19,8 @@ export async function getStashInfo(cwd: string): Promise<StashInfo[]> {
       const parts = line.split('\0');
       if (parts.length < 3) continue;
 
-      const refMatch = parts[0].match(/stash@\{(\d+)\}/);
-      if (!refMatch) continue;
+      const refMatch = parts[0]?.match(/stash@\{(\d+)\}/);
+      if (!refMatch || !refMatch[1]) continue;
 
       const index = parseInt(refMatch[1]);
       const message = parts[1] || '';
@@ -53,7 +53,7 @@ export async function getStashInfo(cwd: string): Promise<StashInfo[]> {
             try {
               const stat = await gitCommand(['stash', 'show', `stash@{${entry.index}}`, '--stat'], cwd);
               const match = stat.match(/(\d+) files? changed/);
-              if (match) filesChanged = parseInt(match[1]);
+              if (match && match[1]) filesChanged = parseInt(match[1]);
             } catch {}
           }
 
