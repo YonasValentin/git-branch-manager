@@ -123,6 +123,7 @@ export const Button: React.FC<ButtonProps> = ({
   const [hover, setHover] = useState(false);
   return (
     <button
+      className="focus-ring"
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: s.gap,
@@ -155,6 +156,7 @@ export const IconButton: React.FC<IconButtonProps> = ({ size = 28, label, childr
   return (
     <button
       title={label} aria-label={label}
+      className="focus-ring"
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{
         width: size, height: size,
@@ -339,6 +341,7 @@ export const Chip: React.FC<ChipProps> = ({ active, onClick, children, count, to
   const dot = tone ? CHIP_DOT_COLORS[tone] : null;
   return (
     <button
+      className="focus-ring"
       onClick={onClick}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{
@@ -491,7 +494,7 @@ export const Dropdown: React.FC<DropdownProps> = ({ label, value, options, onCha
   const current = options.find(o => o.value === value);
   return (
     <div ref={ref} style={{ position: 'relative' }}>
-      <button onClick={() => setOpen(!open)} style={{
+      <button onClick={() => setOpen(!open)} className="focus-ring" style={{
         height: 28, padding: '0 8px',
         display: 'inline-flex', alignItems: 'center', gap: 6,
         background: open ? 'var(--bg-hover)' : 'transparent',

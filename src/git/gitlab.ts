@@ -1,6 +1,12 @@
 import * as https from 'https';
+import * as http from 'http';
 import { PRStatus } from '../types';
 import { parseLinkHeader } from '../internals/parseLinkHeader';
+
+export type RequestFn = (
+  options: https.RequestOptions,
+  cb: (res: http.IncomingMessage) => void,
+) => http.ClientRequest;
 
 const MAX_PAGES = 10;
 const MAX_BODY = 5 * 1024 * 1024;
@@ -19,7 +25,7 @@ interface PageResult {
   nextUrl?: string;
 }
 
-function fetchPage(url: URL, token: string): Promise<PageResult> {
+function fetchPage(url: URL, token: string, request: RequestFn): Promise<PageResult> {
   return new Promise((resolve, reject) => {
     const options: https.RequestOptions = {
       hostname: url.hostname,
@@ -32,7 +38,7 @@ function fetchPage(url: URL, token: string): Promise<PageResult> {
       },
     };
 
-    const req = https.request(options, (res) => {
+    const req = request(options, (res) => {
       let data = '';
       let aborted = false;
       res.on('data', (chunk) => {
@@ -85,6 +91,7 @@ export async function fetchGitLabMRs(
   projectPath: string,
   branches: string[],
   token: string,
+  request: RequestFn = https.request,
 ): Promise<Map<string, PRStatus>> {
   const result = new Map<string, PRStatus>();
   const branchSet = new Set(branches);
@@ -94,7 +101,7 @@ export async function fetchGitLabMRs(
   );
 
   for (let page = 0; page < MAX_PAGES && url; page++) {
-    const { mrs, nextUrl }: PageResult = await fetchPage(url, token);
+    const { mrs, nextUrl }: PageResult = await fetchPage(url, token, request);
     for (const mr of mrs) {
       const branchName = mr.source_branch;
       if (branchName && branchSet.has(branchName)) {

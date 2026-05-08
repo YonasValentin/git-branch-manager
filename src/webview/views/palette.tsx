@@ -53,8 +53,8 @@ export const Palette: React.FC<PaletteProps> = ({ open, branches, onClose, onAdd
   ], [branches]);
 
   const filtered = query
-    ? allCommands.filter(c => c.title.toLowerCase().includes(query.toLowerCase()))
-    : allCommands.slice(0, 12);
+    ? allCommands.filter(c => c.title.toLowerCase().includes(query.toLowerCase())).slice(0, 10)
+    : allCommands.slice(0, 10);
 
   const grouped = useMemo(() => {
     const m: Record<string, PaletteItem[]> = {};

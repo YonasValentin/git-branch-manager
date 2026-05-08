@@ -18,13 +18,13 @@ import {
 import { RepositoryContextManager, BranchTreeProvider, BranchItem, StatusGroupItem, GoneDetector, AutoCleanupEvaluator, DiffContentProvider, GIT_DIFF_SCHEME } from './services';
 
 // Utilities
-import { getNonce, formatAge, validateRegexPattern } from './utils';
+import { getNonce, formatAge } from './utils';
 import { escapeForScriptTag } from './internals/escapeForScriptTag';
-import { reqStr, reqStrArray, reqNum, isCleanupRuleArray } from './internals/messageValidators';
 import { mapPR } from './internals/mapPR';
 import { buildInitialData } from './internals/buildInitialData';
+import { buildWebviewCss } from './internals/buildWebviewCss';
 import { createSafePost } from './internals/safePost';
-import { requireValidRef } from './internals/validateRef';
+import { dispatchWebviewMessage, type WebviewMessageDeps } from './internals/dispatchWebviewMessage';
 
 // Git operations
 import {
@@ -475,7 +475,10 @@ async function showBranchManager(
   const panel = vscode.window.createWebviewPanel('branchManager', 'Git Branch Manager', vscode.ViewColumn.One, {
     enableScripts: true,
     retainContextWhenHidden: true,
-    localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'dist')],
+    localResourceRoots: [
+      vscode.Uri.joinPath(context.extensionUri, 'dist'),
+      vscode.Uri.joinPath(context.extensionUri, 'media'),
+    ],
   });
 
   // Track disposal so async tasks (PR fetch, comparisons) don't postMessage after close.
@@ -487,10 +490,14 @@ async function showBranchManager(
   );
 
   async function updateWebview() {
+    const persistedTheme = context.workspaceState.get<'dark' | 'light'>('theme', 'dark');
     const repo = await repoContext.getActiveRepository();
     if (!repo) {
       panel.title = 'Git Branch Manager';
-      panel.webview.html = getWebviewContent(panel.webview, context.extensionUri, buildInitialData([], [], [], [], [], [], new Map(), '', 'main', '', 30));
+      panel.webview.html = getWebviewContent(panel.webview, context.extensionUri, {
+        ...buildInitialData([], [], [], [], [], [], new Map(), '', 'main', '', 30),
+        theme: persistedTheme,
+      });
       return;
     }
     panel.title = `Git Branch Manager: ${repo.name}`;
@@ -516,7 +523,10 @@ async function showBranchManager(
     panel.webview.html = getWebviewContent(
       panel.webview,
       context.extensionUri,
-      buildInitialData(branches, remoteBranches, worktrees, stashes, cleanupRulesArray, recoveryLog, branchNotes, currentBranch ?? '', baseBranch, repo.name, daysUntilStale)
+      {
+        ...buildInitialData(branches, remoteBranches, worktrees, stashes, cleanupRulesArray, recoveryLog, branchNotes, currentBranch ?? '', baseBranch, repo.name, daysUntilStale),
+        theme: persistedTheme,
+      }
     );
 
     // Phase 2: Fetch PR data asynchronously and push to webview
@@ -569,501 +579,93 @@ async function showBranchManager(
 
   await updateWebview();
 
-  type WebviewMessage = { command: string } & Record<string, unknown>;
-
   panel.webview.onDidReceiveMessage(
-    async (message: WebviewMessage) => {
-      if (!message || typeof message.command !== 'string') return;
+    async (message: unknown) => {
+      // Don't gate the dispatcher on having an active repo — ambient commands
+      // (openSponsor/openSupport/openGithub/setTheme/switchRepository) work
+      // regardless. Repo-required handlers fail gracefully with empty gitRoot.
       const repo = await repoContext.getActiveRepository();
-      if (!repo) return;
-      const gitRoot = repo.path;
+      const gitRoot = repo?.path ?? '';
 
-      switch (message.command) {
-        case 'delete':
-          try {
-            const delBranch = requireValidRef(reqStr(message.branchName, 'branchName'), 'branchName');
-            await deleteBranchForce(gitRoot, delBranch);
-            vscode.window.showInformationMessage(`Deleted branch: ${delBranch}`);
-
+      const deps: WebviewMessageDeps = {
+        context,
+        gitRoot,
+        ui: {
+          showInfo: (msg) => { void vscode.window.showInformationMessage(msg); },
+          showWarning: (msg) => { void vscode.window.showWarningMessage(msg); },
+          showError: (msg) => { void vscode.window.showErrorMessage(msg); },
+          showInputBox: (opts) => vscode.window.showInputBox(opts),
+          showWarningModal: (msg, ...items) => vscode.window.showWarningMessage(msg, { modal: true }, ...items),
+          showInfoModal: (msg, ...items) => vscode.window.showInformationMessage(msg, { modal: true }, ...items),
+        },
+        env: {
+          openExternal: (uri) => vscode.env.openExternal(vscode.Uri.parse(uri)),
+          executeCommand: <T,>(cmd: string, ...args: unknown[]) => vscode.commands.executeCommand<T>(cmd, ...args),
+          clipboardRead: () => vscode.env.clipboard.readText(),
+          clipboardWrite: (text) => Promise.resolve(vscode.env.clipboard.writeText(text)).then(() => undefined),
+        },
+        git: {
+          deleteBranchForce,
+          checkout: (cwd, name) => gitCommand(['checkout', name], cwd).then(() => undefined),
+          rename: renameBranch,
+          compare: compareBranches,
+          timeline: getBranchTimeline,
+          branchInfo: getBranchInfo,
+          createStash,
+          applyStash,
+          popStash,
+          dropStash,
+          clearStashes,
+        },
+        storage: {
+          saveBranchNote,
+          getCleanupRules,
+          saveCleanupRules,
+          evaluateCleanupRule,
+          removeRecoveryEntry,
+          restoreFromLog,
+        },
+        hooks: {
+          createBranchFromTemplate: () => createBranchFromTemplate(repoContext),
+          createWorktreeFromBranch: () => createWorktreeFromBranch(repoContext),
+          getGitHubToken: getGitHubAccessToken,
+          recordBranchDeleted: async (count) => {
+            if (count <= 0) return;
             const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
-            await context.globalState.update('totalBranchesDeleted', totalDeleted + 1);
+            await context.globalState.update('totalBranchesDeleted', totalDeleted + count);
             await checkAndShowReviewRequest(context);
-
-            await updateWebview();
-            await updateGlobalStatusBar();
-          } catch (error) {
-            vscode.window.showErrorMessage(`Failed to delete branch: ${error}`);
-          }
-          break;
-
-        case 'deleteMultiple':
-          const branchesToDelete = reqStrArray(message.branchNames, 'branchNames').map((b) => requireValidRef(b, 'branchNames'));
-          const results = { success: [] as string[], failed: [] as Array<{ branch: string; error: string }> };
-
-          for (const branch of branchesToDelete) {
-            try {
-              await deleteBranchForce(gitRoot, branch);
-              results.success.push(branch);
-            } catch (error) {
-              results.failed.push({ branch, error: String(error) });
-            }
-          }
-
-          const totalDeleted = context.globalState.get<number>('totalBranchesDeleted', 0);
-          await context.globalState.update('totalBranchesDeleted', totalDeleted + results.success.length);
-
-          if (results.success.length > 0) {
-            vscode.window.showInformationMessage(`Deleted ${results.success.length} branches`);
-            await checkAndShowReviewRequest(context);
-          }
-
-          if (results.failed.length > 0) {
-            vscode.window.showWarningMessage(`Failed to delete ${results.failed.length} branches`);
-          }
-
-          await updateWebview();
-          await updateGlobalStatusBar();
-          break;
-
-        case 'switch':
-          try {
-            const switchBranchName = requireValidRef(reqStr(message.branchName, 'branchName'), 'branchName');
-            await gitCommand(['checkout', switchBranchName], gitRoot);
-            vscode.window.showInformationMessage(`Switched to branch: ${switchBranchName}`);
-            await updateWebview();
-            await updateGlobalStatusBar();
-          } catch (error) {
-            vscode.window.showErrorMessage(`Failed to switch branch: ${error}`);
-          }
-          break;
-
-        case 'createStash':
-          try {
-            const stashMessage = await vscode.window.showInputBox({
-              prompt: 'Stash message (optional)',
-              placeHolder: 'WIP: feature work',
-            });
-            if (stashMessage !== undefined) {
-              await createStash(gitRoot, stashMessage || undefined);
-              vscode.window.showInformationMessage('Created stash');
-              await updateWebview();
-            }
-          } catch (error) {
-            vscode.window.showErrorMessage(`Failed to create stash: ${error}`);
-          }
-          break;
-
-        case 'applyStash':
-          try {
-            const idx = reqNum(message.index, 'index');
-            await applyStash(gitRoot, idx);
-            vscode.window.showInformationMessage(`Applied stash ${idx}`);
-            await updateWebview();
-          } catch (error) {
-            vscode.window.showErrorMessage(`Failed to apply stash: ${error}`);
-          }
-          break;
-
-        case 'popStash':
-          try {
-            const idx = reqNum(message.index, 'index');
-            await popStash(gitRoot, idx);
-            vscode.window.showInformationMessage(`Popped stash ${idx}`);
-            await updateWebview();
-          } catch (error) {
-            vscode.window.showErrorMessage(`Failed to pop stash: ${error}`);
-          }
-          break;
-
-        case 'dropStash':
-          try {
-            const idx = reqNum(message.index, 'index');
-            await dropStash(gitRoot, idx);
-            vscode.window.showInformationMessage(`Dropped stash ${idx}`);
-            await updateWebview();
-          } catch (error) {
-            vscode.window.showErrorMessage(`Failed to drop stash: ${error}`);
-          }
-          break;
-
-        case 'clearStashes':
-          const confirm = await vscode.window.showWarningMessage(
-            'Are you sure you want to clear all stashes? This cannot be undone.',
-            { modal: true },
-            'Clear All'
-          );
-          if (confirm === 'Clear All') {
-            try {
-              await clearStashes(gitRoot);
-              vscode.window.showInformationMessage('Cleared all stashes');
-              await updateWebview();
-            } catch (error) {
-              vscode.window.showErrorMessage(`Failed to clear stashes: ${error}`);
-            }
-          }
-          break;
-
-        case 'compareBranches':
-          try {
-            const branchA = requireValidRef(reqStr(message.branchA, 'branchA'), 'branchA');
-            const branchB = requireValidRef(reqStr(message.branchB, 'branchB'), 'branchB');
-            const comparison = await compareBranches(gitRoot, branchA, branchB);
-            safePost({ command: 'comparisonResult', data: {
-              ahead: (comparison.commitsA ?? []).map((c: CommitInfo) => ({ hash: c.hash, message: c.message, author: c.author, date: c.date })),
-              behind: (comparison.commitsB ?? []).map((c: CommitInfo) => ({ hash: c.hash, message: c.message, author: c.author, date: c.date })),
-              files: (comparison.files ?? []).map((f: FileChange) => ({ path: f.path, status: f.status, additions: 0, deletions: 0 })),
-            } });
-          } catch (error) {
-            vscode.window.showErrorMessage(`Failed to compare branches: ${error}`);
-          }
-          break;
-
-        case 'getTimeline':
-          try {
-            const branchName = requireValidRef(reqStr(message.branchName, 'branchName'), 'branchName');
-            const timeline = await getBranchTimeline(gitRoot, branchName, 5);
-            safePost({ command: 'timelineResult', data: { branchName, commits: timeline } });
-          } catch {
-            // Silent failure — timeline is supplementary
-          }
-          break;
-
-        case 'renameBranch':
-          try {
-            const oldName = requireValidRef(reqStr(message.oldName, 'oldName'), 'oldName');
-            const newName = await vscode.window.showInputBox({
-              prompt: 'New branch name',
-              value: oldName,
-              validateInput: (value) => {
-                if (!value) return 'Branch name cannot be empty';
-                if (value === oldName) return 'New name must be different';
-                return null;
-              },
-            });
-
-            if (newName) {
-              await renameBranch(gitRoot, oldName, newName);
-              vscode.window.showInformationMessage(`Renamed ${oldName} to ${newName}`);
-              await updateWebview();
-              await updateGlobalStatusBar();
-            }
-          } catch (error) {
-            vscode.window.showErrorMessage(`Failed to rename branch: ${error}`);
-          }
-          break;
-
-        case 'batchRename':
-          try {
-            const pattern = reqStr(message.pattern, 'pattern');
-            const replacement = reqStr(message.replacement, 'replacement');
-            const branchesToRename = reqStrArray(message.branches, 'branches');
-
-            const validation = validateRegexPattern(pattern);
-            if (!validation.valid) {
-              vscode.window.showErrorMessage(`Invalid regex pattern: ${validation.error}`);
-              return;
-            }
-
-            const regex = new RegExp(pattern);
-
-            const renames: Array<{ old: string; new: string }> = [];
-            for (const branch of branchesToRename) {
-              if (regex.test(branch)) {
-                const newName = branch.replace(regex, replacement);
-                if (newName !== branch) {
-                  renames.push({ old: branch, new: newName });
-                }
-              }
-            }
-
-            if (renames.length === 0) {
-              vscode.window.showInformationMessage('No branches matched the pattern');
-              return;
-            }
-
-            const previewMessage = renames.map((r) => `${r.old} → ${r.new}`).join('\n');
-            const confirm = await vscode.window.showInformationMessage(
-              `Rename ${renames.length} branches?\n\n${previewMessage}`,
-              { modal: true },
-              'Rename All'
+          },
+          selectRepository: () => repoContext.selectRepository(),
+          setActiveRepository: (path) => repoContext.setActiveRepository(path),
+          discoverRepositories: () => repoContext.discoverRepositories(),
+          getRepositoriesCount: () => repoContext.getRepositories().length,
+          branchTreeRefresh: () => branchTreeProvider.scheduleRefresh(),
+          openDiff: async (branchA, branchB, filePath, root) => {
+            const paths = filePath.split('\t');
+            const fileInB = paths[0] ?? filePath;
+            const fileInA = paths.length > 1 ? (paths[1] ?? fileInB) : fileInB;
+            const leftParams = `branch=${encodeURIComponent(branchB)}&file=${encodeURIComponent(fileInB)}&repo=${encodeURIComponent(root)}`;
+            const rightParams = `branch=${encodeURIComponent(branchA)}&file=${encodeURIComponent(fileInA)}&repo=${encodeURIComponent(root)}`;
+            const leftUri = vscode.Uri.parse(`${GIT_DIFF_SCHEME}:${encodeURIComponent(fileInB)}?${leftParams}`);
+            const rightUri = vscode.Uri.parse(`${GIT_DIFF_SCHEME}:${encodeURIComponent(fileInA)}?${rightParams}`);
+            const displayFile = paths.length > 1 ? `${fileInB} \u2192 ${fileInA}` : fileInA;
+            await vscode.commands.executeCommand(
+              'vscode.diff',
+              leftUri,
+              rightUri,
+              `${displayFile} (${branchB} \u2194 ${branchA})`,
             );
+          },
+        },
+        post: safePost,
+        updateWebview,
+        updateStatusBar: updateGlobalStatusBar,
+      };
 
-            if (confirm === 'Rename All') {
-              let successCount = 0;
-              const failures: string[] = [];
-              for (const rename of renames) {
-                try {
-                  await renameBranch(gitRoot, rename.old, rename.new);
-                  successCount++;
-                } catch (error) {
-                  const msg = error instanceof Error ? error.message : String(error);
-                  failures.push(`${rename.old}: ${msg}`);
-                }
-              }
-
-              if (successCount > 0) {
-                vscode.window.showInformationMessage(`Renamed ${successCount} branches`);
-              }
-              if (failures.length > 0) {
-                // Roll up failures into one notification (avoids N popups)
-                const detail = failures.length <= 3
-                  ? failures.join('; ')
-                  : `${failures.slice(0, 3).join('; ')}; +${failures.length - 3} more`;
-                vscode.window.showWarningMessage(`Failed to rename ${failures.length} branches: ${detail}`);
-              }
-              await updateWebview();
-              await updateGlobalStatusBar();
-            }
-          } catch (error) {
-            vscode.window.showErrorMessage(`Batch rename failed: ${error}`);
-          }
-          break;
-
-        case 'deleteRemote':
-          try {
-            const remote = reqStr(message.remote, 'remote');
-            const branch = requireValidRef(reqStr(message.branch, 'branch'), 'branch');
-            const fullName = `${remote}/${branch}`;
-            await deleteBranchForce(gitRoot, fullName);
-            vscode.window.showInformationMessage(`Deleted remote branch: ${fullName}`);
-            await updateWebview();
-          } catch (error) {
-            vscode.window.showErrorMessage(`Failed to delete remote branch: ${error}`);
-          }
-          break;
-
-        case 'deleteMultipleRemotes': {
-          const raw = message.branches;
-          if (!Array.isArray(raw)) break;
-          const remoteBranches = raw.filter((rb): rb is { remote: string; name: string } =>
-            rb !== null && typeof rb === 'object' &&
-            typeof (rb as Record<string, unknown>).remote === 'string' &&
-            typeof (rb as Record<string, unknown>).name === 'string'
-          );
-          let successCount = 0;
-
-          for (const rb of remoteBranches) {
-            try {
-              await deleteBranchForce(gitRoot, `${rb.remote}/${rb.name}`);
-              successCount++;
-            } catch (error) {
-              console.error(`Failed to delete ${rb.remote}/${rb.name}:`, error);
-            }
-          }
-
-          if (successCount > 0) {
-            vscode.window.showInformationMessage(`Deleted ${successCount} remote branches`);
-            await updateWebview();
-          }
-          break;
-        }
-
-        case 'promptBranchNote': {
-          const branchName = requireValidRef(reqStr(message.branch, 'branch'), 'branch');
-          const noteText = await vscode.window.showInputBox({
-            prompt: `Add note for ${branchName}`,
-            placeHolder: 'Enter a note for this branch',
-          });
-          if (noteText !== undefined) {
-            await saveBranchNote(context, gitRoot, branchName, noteText);
-            await updateWebview();
-          }
-          break;
-        }
-
-        case 'saveNote':
-        case 'saveBranchNote':
-          await saveBranchNote(
-            context,
-            gitRoot,
-            reqStr(message.branchName ?? message.branch, 'branchName'),
-            typeof message.note === 'string' ? message.note : ''
-          );
-          await updateWebview();
-          break;
-
-        case 'saveCleanupRules':
-          if (!isCleanupRuleArray(message.rules)) {
-            vscode.window.showErrorMessage('Invalid cleanup rules payload');
-            break;
-          }
-          await saveCleanupRules(context, gitRoot, message.rules);
-          await updateWebview();
-          break;
-
-        case 'evaluateRule': {
-          const r = message.rule;
-          if (!r || typeof r !== 'object' || typeof (r as Record<string, unknown>).id !== 'string') {
-            break;
-          }
-          const rule = r as CleanupRule;
-          const allBranches = await getBranchInfo(gitRoot);
-          const matchingBranches = evaluateCleanupRule(allBranches, rule);
-
-          safePost({
-            command: 'ruleEvaluationResult',
-            matches: matchingBranches.map((b) => b.name),
-          });
-          break;
-        }
-
-        case 'exportRules': {
-          const exportedRules = getCleanupRules(context, gitRoot);
-          await vscode.env.clipboard.writeText(JSON.stringify(exportedRules, null, 2));
-          vscode.window.showInformationMessage(`Exported ${exportedRules.length} rule(s) to clipboard`);
-          break;
-        }
-
-        case 'importRules': {
-          const clipboardText = await vscode.env.clipboard.readText();
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(clipboardText);
-          } catch {
-            vscode.window.showErrorMessage('Clipboard does not contain valid JSON');
-            break;
-          }
-          if (!Array.isArray(parsed)) {
-            vscode.window.showErrorMessage('Imported JSON must be an array of rules');
-            break;
-          }
-          const imported = (parsed as unknown[]).filter(
-            (entry): entry is CleanupRule =>
-              entry !== null &&
-              typeof entry === 'object' &&
-              typeof (entry as Record<string, unknown>).id === 'string' &&
-              typeof (entry as Record<string, unknown>).name === 'string' &&
-              typeof (entry as Record<string, unknown>).enabled === 'boolean' &&
-              (entry as Record<string, unknown>).conditions !== null &&
-              typeof (entry as Record<string, unknown>).conditions === 'object'
-          );
-          if (imported.length === 0) {
-            vscode.window.showErrorMessage('No valid rules found in clipboard JSON');
-            break;
-          }
-          const existingRules = getCleanupRules(context, gitRoot);
-          if (existingRules.length > 0) {
-            const answer = await vscode.window.showWarningMessage(
-              `Replace ${existingRules.length} existing rule(s) with ${imported.length} imported?`,
-              { modal: true },
-              'Replace'
-            );
-            if (answer !== 'Replace') break;
-          }
-          await saveCleanupRules(context, gitRoot, imported);
-          await updateWebview();
-          vscode.window.showInformationMessage(`Imported ${imported.length} rule(s)`);
-          break;
-        }
-
-        case 'connectGitHub':
-          try {
-            const token = await getGitHubAccessToken(/* silent */ false);
-            if (token) {
-              vscode.window.showInformationMessage('Connected to GitHub');
-              await updateWebview();
-            }
-          } catch (error) {
-            vscode.window.showErrorMessage(`Failed to connect to GitHub: ${error}`);
-          }
-          break;
-
-        case 'createBranch':
-          void createBranchFromTemplate(repoContext);
-          break;
-
-        case 'createWorktree':
-          void createWorktreeFromBranch(repoContext);
-          break;
-
-        case 'openSupport':
-          void vscode.env.openExternal(vscode.Uri.parse('https://www.buymeacoffee.com/YonasValentin'));
-          break;
-
-        case 'openSponsor':
-          void vscode.env.openExternal(vscode.Uri.parse('https://github.com/sponsors/YonasValentin'));
-          break;
-
-        case 'openGithub':
-          void vscode.env.openExternal(vscode.Uri.parse('https://github.com/YonasValentin/git-branch-manager/issues'));
-          break;
-
-        case 'dismissSponsor':
-          await context.globalState.update('sponsorBannerDismissed', true);
-          break;
-
-        case 'openUrl':
-          if (typeof message.url === 'string') {
-            void vscode.env.openExternal(vscode.Uri.parse(message.url));
-          }
-          break;
-
-        case 'refresh':
-          await updateWebview();
-          break;
-
-        case 'switchRepository': {
-          if (repoContext.getRepositories().length === 0) {
-            await repoContext.discoverRepositories();
-          }
-          const selectedPath = await repoContext.selectRepository();
-          if (selectedPath) {
-            await repoContext.setActiveRepository(selectedPath);
-            await updateWebview();
-            await updateGlobalStatusBar();
-            branchTreeProvider.scheduleRefresh();
-          }
-          break;
-        }
-
-        case 'restoreBranch': {
-          const branchName = requireValidRef(reqStr(message.branchName, 'branchName'), 'branchName');
-          const commitHash = reqStr(message.commitHash, 'commitHash');
-          const result = await restoreFromLog(context, gitRoot, branchName, commitHash);
-          if (!result.success) {
-            vscode.window.showErrorMessage(`Failed to restore: ${result.error}`);
-          }
-          await updateWebview();
-          await updateGlobalStatusBar();
-          break;
-        }
-
-        case 'clearRecoveryEntry': {
-          const branchName = requireValidRef(reqStr(message.branchName, 'branchName'), 'branchName');
-          const commitHash = reqStr(message.commitHash, 'commitHash');
-          await removeRecoveryEntry(context, gitRoot, branchName, commitHash);
-          await updateWebview();
-          break;
-        }
-
-        case 'openDiff': {
-          const branchA = requireValidRef(reqStr(message.branchA, 'branchA'), 'branchA');
-          const branchB = requireValidRef(reqStr(message.branchB, 'branchB'), 'branchB');
-          const filePath = reqStr(message.filePath, 'filePath');
-          // Handle renamed files (R status): path is "oldPath\tnewPath"
-          const paths = filePath.split('\t');
-          const fileInB = paths[0] ?? filePath; // old path in branchB
-          const fileInA = paths.length > 1 ? (paths[1] ?? fileInB) : fileInB; // new path in branchA
-
-          const leftParams = `branch=${encodeURIComponent(branchB)}&file=${encodeURIComponent(fileInB)}&repo=${encodeURIComponent(gitRoot)}`;
-          const rightParams = `branch=${encodeURIComponent(branchA)}&file=${encodeURIComponent(fileInA)}&repo=${encodeURIComponent(gitRoot)}`;
-
-          const leftUri = vscode.Uri.parse(`${GIT_DIFF_SCHEME}:${encodeURIComponent(fileInB)}?${leftParams}`);
-          const rightUri = vscode.Uri.parse(`${GIT_DIFF_SCHEME}:${encodeURIComponent(fileInA)}?${rightParams}`);
-
-          const displayFile = paths.length > 1 ? `${fileInB} \u2192 ${fileInA}` : fileInA;
-          await vscode.commands.executeCommand(
-            'vscode.diff',
-            leftUri,
-            rightUri,
-            `${displayFile} (${branchB} \u2194 ${branchA})`
-          );
-          break;
-        }
-      }
+      await dispatchWebviewMessage(message, deps);
     },
     undefined,
-    context.subscriptions
+    context.subscriptions,
   );
 }
 
@@ -1078,6 +680,10 @@ function getWebviewContent(
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'webview.js'));
   const initialDataJson = escapeForScriptTag(JSON.stringify(data));
 
+  // `asWebviewUri` returns one URI per file, so we resolve each filename through it.
+  const fontUri = (filename: string) =>
+    webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'fonts', filename)).toString();
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1085,73 +691,7 @@ function getWebviewContent(
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; script-src 'nonce-${nonce}' ${webview.cspSource}; style-src 'unsafe-inline'; font-src ${webview.cspSource} data:; img-src ${webview.cspSource} data:;"/>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body, #root { height: 100%; }
-    body { background: var(--bg, var(--vscode-editor-background)); color: var(--fg, var(--vscode-editor-foreground)); }
-
-    /* Design tokens — dark theme default */
-    :root, [data-theme="dark"] {
-      --bg:           #0a0a0b;
-      --bg-elevated:  #111113;
-      --bg-raised:    #18181b;
-      --bg-hover:     rgba(255,255,255,0.06);
-      --fg:           #d4d4d8;
-      --fg-strong:    #fafafa;
-      --fg-muted:     #71717a;
-      --fg-subtle:    #52525b;
-      --fg-faint:     #3f3f46;
-      --border:       rgba(255,255,255,0.08);
-      --border-strong:rgba(255,255,255,0.14);
-      --accent:       #34d399;
-      --accent-strong:#10b981;
-      --accent-soft:  rgba(52,211,153,0.12);
-      --accent-ring:  rgba(52,211,153,0.35);
-      --healthy:      #34d399;
-      --warning:      #fbbf24;
-      --danger:       #f43f5e;
-      --critical:     #f43f5e;
-      --info:         #60a5fa;
-      --pr:           #a78bfa;
-      --bg-input:     rgba(255,255,255,0.04);
-      --bg-selected:  rgba(52,211,153,0.10);
-      --border-focus: rgba(52,211,153,0.45);
-      --row-py:       8px;
-      --shadow-toast:    0 8px 24px rgba(0,0,0,0.55);
-      --shadow-popover:  0 12px 32px rgba(0,0,0,0.6);
-      --shadow-drawer:   -8px 0 32px rgba(0,0,0,0.55);
-      --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-      --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-    }
-    [data-theme="light"] {
-      --bg:           #f8f8f8;
-      --bg-elevated:  #ffffff;
-      --bg-raised:    #f1f1f3;
-      --bg-hover:     rgba(0,0,0,0.05);
-      --fg:           #27272a;
-      --fg-strong:    #09090b;
-      --fg-muted:     #71717a;
-      --fg-subtle:    #a1a1aa;
-      --fg-faint:     #d4d4d8;
-      --border:       rgba(0,0,0,0.08);
-      --border-strong:rgba(0,0,0,0.14);
-      --bg-input:     rgba(0,0,0,0.03);
-      --bg-selected:  rgba(16,185,129,0.10);
-      --border-focus: rgba(16,185,129,0.45);
-      --shadow-toast:    0 4px 16px rgba(0,0,0,0.15);
-      --shadow-popover:  0 8px 24px rgba(0,0,0,0.18);
-      --shadow-drawer:   -4px 0 16px rgba(0,0,0,0.12);
-    }
-
-    body { font-family: var(--font-sans); font-size: 13px; }
-    button, input, textarea, select { font-family: inherit; }
-    button { cursor: pointer; }
-
-    @keyframes fade-in    { from { opacity: 0 } to { opacity: 1 } }
-    @keyframes slide-up   { from { transform: translateY(8px); opacity: 0 } to { transform: none; opacity: 1 } }
-    @keyframes slide-in-right { from { transform: translateX(16px); opacity: 0 } to { transform: none; opacity: 1 } }
-    @keyframes toast-in   { from { transform: translateX(32px); opacity: 0 } to { transform: none; opacity: 1 } }
-  </style>
+  <style>${buildWebviewCss(fontUri)}</style>
 </head>
 <body>
   <div id="root"></div>

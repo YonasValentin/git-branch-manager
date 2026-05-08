@@ -32,6 +32,7 @@ export const RemoteView: React.FC<RemoteViewProps> = ({ remoteBranches, repo, au
     all: remoteBranches.length,
     merged: remoteBranches.filter(b => b.isMerged).length,
     stale: remoteBranches.filter(b => b.daysOld > 30 && !b.isMerged).length,
+    gone: remoteBranches.filter(b => b.isGone).length,
   };
 
   const toggle = (name: string) => {
@@ -82,6 +83,7 @@ export const RemoteView: React.FC<RemoteViewProps> = ({ remoteBranches, repo, au
           <Chip active={filter === 'all'} onClick={() => setFilter('all')} count={counts.all}>All</Chip>
           <Chip active={filter === 'merged'} onClick={() => setFilter('merged')} tone="info" count={counts.merged}>Merged</Chip>
           <Chip active={filter === 'stale'} onClick={() => setFilter('stale')} tone="warning" count={counts.stale}>Stale</Chip>
+          <Chip active={filter === 'gone'} onClick={() => setFilter('gone')} tone="danger" count={counts.gone}>Gone</Chip>
         </div>
 
         {/* Branch list */}

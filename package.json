@@ -332,14 +332,14 @@
             "notify-only"
           ],
           "enumItemLabels": [
-            "Prompt \u2014 ask before deleting",
+            "Prompt — ask before deleting",
             "Auto-delete silently",
-            "Notify only \u2014 no action"
+            "Notify only — no action"
           ],
           "markdownEnumDescriptions": [
             "Show a notification with action buttons when orphaned branches are detected after fetch.",
             "Automatically delete orphaned branches after every fetch without prompting. Branches are logged to recovery.",
-            "Show a passive notification only \u2014 take no cleanup action."
+            "Show a passive notification only — take no cleanup action."
           ],
           "default": "prompt",
           "description": "Action to take when branches tracking deleted remotes are detected after fetch"
@@ -402,9 +402,13 @@
     "lint": "eslint src",
     "test": "vscode-test",
     "test:unit": "vitest run",
-    "test:unit:watch": "vitest"
+    "test:unit:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/mocha": "^10.0.10",
     "@types/node": "16.x",
     "@types/react": "^18.3.1",
@@ -412,10 +416,12 @@
     "@types/vscode": "^1.74.0",
     "@typescript-eslint/eslint-plugin": "^8.31.1",
     "@typescript-eslint/parser": "^8.31.1",
+    "@vitest/coverage-v8": "^1.6.1",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.25.3",
     "eslint": "^9.25.1",
+    "jsdom": "^29.1.1",
     "npm-run-all": "^4.1.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

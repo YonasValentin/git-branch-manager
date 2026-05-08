@@ -1,5 +1,11 @@
 import * as https from 'https';
+import * as http from 'http';
 import { PRStatus } from '../types';
+
+export type RequestFn = (
+  options: https.RequestOptions,
+  cb: (res: http.IncomingMessage) => void,
+) => http.ClientRequest;
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 10;
@@ -30,6 +36,7 @@ function fetchPage(
   repo: string,
   pat: string,
   skip: number,
+  request: RequestFn,
 ): Promise<PageResult> {
   return new Promise((resolve, reject) => {
     const auth = Buffer.from(`:${pat}`).toString('base64');
@@ -44,7 +51,7 @@ function fetchPage(
       },
     };
 
-    const req = https.request(options, (res) => {
+    const req = request(options, (res) => {
       let data = '';
       let aborted = false;
       res.on('data', (chunk) => {
@@ -99,13 +106,14 @@ export async function fetchAzurePRs(
   repo: string,
   branches: string[],
   pat: string,
+  request: RequestFn = https.request,
 ): Promise<Map<string, PRStatus>> {
   const result = new Map<string, PRStatus>();
   const branchSet = new Set(branches);
 
   for (let page = 0; page < MAX_PAGES; page++) {
     const skip = page * PAGE_SIZE;
-    const { prs }: PageResult = await fetchPage(organization, project, repo, pat, skip);
+    const { prs }: PageResult = await fetchPage(organization, project, repo, pat, skip, request);
     for (const pr of prs) {
       const branchName = pr.sourceRefName.replace(/^refs\/heads\//, '');
       if (branchName && branchSet.has(branchName)) {

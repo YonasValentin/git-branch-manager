@@ -159,20 +159,14 @@ export const ToolsView: React.FC<ToolsViewProps> = ({
                 <div style={{ fontSize: TOKENS.fs.md + 0.5, color: 'var(--fg)', marginBottom: 8 }}>Protected branches</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                   {protectedBranches.map(b => (
-                    <div key={b} style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 4,
-                      padding: '2px 6px', background: 'var(--bg-raised)',
-                      border: '1px solid var(--border-strong)', borderRadius: TOKENS.radius.sm,
-                      fontSize: TOKENS.fs.sm, fontFamily: 'var(--font-mono)',
-                    }}>
-                      <I.Shield size={9} style={{ color: 'var(--fg-muted)' }} />
+                    <Badge key={b} tone="outline" icon={<I.Shield size={9} />} style={{ fontFamily: 'var(--font-mono)' }}>
                       {b}
                       <button
                         onClick={() => setProtectedBranches(protectedBranches.filter(x => x !== b))}
-                        style={{ background: 'transparent', border: 'none', color: 'var(--fg-muted)', cursor: 'pointer', padding: 0, display: 'flex' }}>
+                        style={{ background: 'transparent', border: 'none', color: 'var(--fg-muted)', cursor: 'pointer', padding: 0, marginLeft: 4, display: 'inline-flex' }}>
                         <I.X size={10} />
                       </button>
-                    </div>
+                    </Badge>
                   ))}
                   <button style={{
                     background: 'transparent', border: '1px dashed var(--border-strong)',

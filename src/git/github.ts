@@ -1,7 +1,13 @@
 import * as https from 'https';
+import * as http from 'http';
 import { gitCommand } from './core';
 import { PRStatus } from '../types';
 import { parseLinkHeader } from '../internals/parseLinkHeader';
+
+export type RequestFn = (
+  options: https.RequestOptions,
+  cb: (res: http.IncomingMessage) => void,
+) => http.ClientRequest;
 
 export async function getGitHubInfo(cwd: string): Promise<{ owner: string; repo: string } | null> {
   try {
@@ -35,7 +41,7 @@ interface PageResult {
 
 // Throws on non-2xx so the caller can show an error toast instead of
 // silently degrading to "no PRs".
-function fetchPage(url: URL, token: string | undefined): Promise<PageResult> {
+function fetchPage(url: URL, token: string | undefined, request: RequestFn): Promise<PageResult> {
   return new Promise((resolve, reject) => {
     const options: https.RequestOptions = {
       hostname: url.hostname,
@@ -49,7 +55,7 @@ function fetchPage(url: URL, token: string | undefined): Promise<PageResult> {
       },
     };
 
-    const req = https.request(options, (res) => {
+    const req = request(options, (res) => {
       let data = '';
       let aborted = false;
       res.on('data', (chunk) => {
@@ -104,6 +110,7 @@ export async function fetchGitHubPRs(
   repo: string,
   branches: string[],
   token?: string,
+  request: RequestFn = https.request,
 ): Promise<Map<string, PRStatus>> {
   const result = new Map<string, PRStatus>();
   const branchSet = new Set(branches);
@@ -113,7 +120,7 @@ export async function fetchGitHubPRs(
   );
 
   for (let page = 0; page < MAX_PAGES && url; page++) {
-    const { prs, nextUrl }: PageResult = await fetchPage(url, token);
+    const { prs, nextUrl }: PageResult = await fetchPage(url, token, request);
     for (const pr of prs) {
       const branchName = pr.head?.ref;
       if (branchName && branchSet.has(branchName)) {

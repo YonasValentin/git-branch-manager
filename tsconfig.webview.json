@@ -15,5 +15,5 @@
 		"noFallthroughCasesInSwitch": true
 	},
 	"include": ["src/webview/**/*"],
-	"exclude": ["src/webview/**/*.unit.test.ts", "src/webview/**/*.unit.test.tsx"]
+	"exclude": ["src/webview/**/*.unit.test.ts", "src/webview/**/*.unit.test.tsx", "src/webview/internals/testSetup.ts"]
 }

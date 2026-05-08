@@ -66,7 +66,8 @@ export async function detectPlatform(cwd: string): Promise<PlatformInfo> {
     }
 
     // 3. Azure DevOps old HTTPS — https://org.visualstudio.com/project/_git/repo
-    const azureOldMatch = url.match(/([^.]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/.]+)/);
+    // Anchor on `//` so `[^./]+` doesn't slurp in the protocol prefix.
+    const azureOldMatch = url.match(/\/\/([^./]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/.]+)/);
     if (azureOldMatch && azureOldMatch[1] && azureOldMatch[2] && azureOldMatch[3]) {
       return {
         platform: 'azure',

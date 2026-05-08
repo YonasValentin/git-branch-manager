@@ -35,7 +35,7 @@ export const App: React.FC = () => {
   const [drawerBranch, setDrawerBranch] = useState<RepoBranch | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastData[]>([]);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<'dark' | 'light'>(data.theme ?? 'dark');
   const [branches, setBranches] = useState(data.branches);
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
 
@@ -98,7 +98,7 @@ export const App: React.FC = () => {
 
         <div style={{ flex: 1 }} />
 
-        <button onClick={() => setPaletteOpen(true)} style={{
+        <button onClick={() => setPaletteOpen(true)} className="focus-ring" style={{
           display: 'flex', alignItems: 'center', gap: 8,
           height: 28, padding: '0 8px 0 10px',
           background: 'var(--bg-raised)', border: '1px solid var(--border-strong)',
@@ -112,9 +112,35 @@ export const App: React.FC = () => {
           <Kbd>⌘</Kbd><Kbd>K</Kbd>
         </button>
 
+        <button
+          onClick={() => sendMessage('openSponsor')}
+          className="focus-ring"
+          title="Sponsor on GitHub"
+          aria-label="Sponsor on GitHub"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            height: 28, padding: '0 10px',
+            background: 'var(--accent-soft)',
+            border: '1px solid transparent',
+            borderRadius: 6,
+            color: 'var(--accent)',
+            fontSize: TOKENS.fs.md, fontWeight: 500,
+            cursor: 'pointer', fontFamily: 'inherit',
+            whiteSpace: 'nowrap', flexShrink: 0,
+            transition: 'background 0.12s',
+          }}
+        >
+          <I.Heart size={12} />
+          <span>Sponsor</span>
+        </button>
+
         <div style={{ display: 'flex', gap: 2 }}>
           <IconButton size={28} label="Toggle theme"
-            onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>
+            onClick={() => {
+              const next = theme === 'dark' ? 'light' : 'dark';
+              setTheme(next);
+              sendMessage('setTheme', { theme: next });
+            }}>
             {theme === 'dark' ? <I.Sun size={14} /> : <I.Moon size={14} />}
           </IconButton>
           <IconButton size={28} label="Settings" onClick={() => setView('tools')}>
@@ -133,7 +159,7 @@ export const App: React.FC = () => {
           display: 'flex', flexDirection: 'column',
         }}>
           {navItems.map(item => (
-            <button key={item.key} onClick={() => setView(item.key)} style={{
+            <button key={item.key} onClick={() => setView(item.key)} className="focus-ring" style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '8px 10px', marginBottom: 1,
               background: view === item.key ? 'var(--bg-hover)' : 'transparent',
@@ -162,13 +188,26 @@ export const App: React.FC = () => {
 
           <div style={{ flex: 1 }} />
 
-          <div style={{
-            padding: '10px 10px', fontSize: TOKENS.fs.sm, color: 'var(--fg-subtle)',
-            borderTop: '1px solid var(--border)',
-            display: 'flex', alignItems: 'center', gap: 6,
-          }}>
-            <Kbd>⌘</Kbd><Kbd>K</Kbd>
-            <span>command palette</span>
+          <div style={{ borderTop: '1px solid var(--border)' }}>
+            <div style={{
+              padding: '10px 10px 6px',
+              fontSize: TOKENS.fs.sm, color: 'var(--fg-subtle)',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+              <Kbd>⌘</Kbd><Kbd>K</Kbd>
+              <span>command palette</span>
+            </div>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 2,
+              padding: '0 6px 8px',
+            }}>
+              <IconButton size={26} label="Buy Me a Coffee" onClick={() => sendMessage('openSupport')}>
+                <I.Coffee size={13} />
+              </IconButton>
+              <IconButton size={26} label="Report an issue on GitHub" onClick={() => sendMessage('openGithub')}>
+                <I.Github size={13} />
+              </IconButton>
+            </div>
           </div>
         </nav>
 

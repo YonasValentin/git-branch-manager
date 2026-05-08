@@ -132,6 +132,7 @@ export interface InitialData {
   stashes: RepoStash[];
   cleanupRules: CleanupRule[];
   recoveryLog: RecoveryEntry[];
+  theme?: 'dark' | 'light';
 }
 
 export interface ToastData {
