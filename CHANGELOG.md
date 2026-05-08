@@ -2,6 +2,28 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [2.4.0] - 2026-05-09
+
+### Added
+- Geist + Geist Mono fonts bundled under `media/fonts/` (no CDN). Custom scrollbars and `.focus-ring` utility for keyboard navigation.
+- "♡ Sponsor" pill in the topbar; Coffee + Report Issue icons in the sidebar footer.
+- Remote view: `gone` filter chip alongside All / Merged / Stale.
+
+### Changed
+- Visual alignment with the Branch Manager design handoff: exact token values, complete light-theme accent + status overrides.
+- Theme now persists per repo via `workspaceState` — the topbar toggle no longer reverts on reload.
+- Webview CSS extracted into `src/internals/buildWebviewCss` for unit-test coverage without mocking `vscode.Webview`.
+- Palette result count capped at 10 (was 12).
+- Tools view: protected branches render as `Badge tone="outline"` instead of inline divs.
+
+### Fixed
+- `--critical` token was duplicating `--danger` (#f43f5e). Now #fb923c per design.
+- `pulse-dot` keyframe was referenced by `StatusDot` but never defined; pending CI status now actually pulses.
+- Webview message handler dropped every command (Sponsor/Coffee/GitHub/New Branch/setTheme) when no active repo. Ambient commands now work regardless; repo-required ones fail loudly with a descriptive error.
+
+### Tests
+- 419 unit (was 390) + 22 integration tests. New coverage: token regression, theme persistence, view diffs, focus-ring application, support-link wiring, contributes parity, git platform clients (Azure / GitHub / GitLab / health / platformDetect), and util suites (regex / format / html / nonce).
+
 ## [2.3.0] - 2026-05-08
 
 ### Changed
