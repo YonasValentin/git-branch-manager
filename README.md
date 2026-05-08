@@ -1,8 +1,8 @@
 # Git Branch Manager - Clean & Organize
 
-[![Version](https://img.shields.io/visual-studio-marketplace/v/YonasValentinMougaardKristensen.git-branch-manager-pro)](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/YonasValentinMougaardKristensen.git-branch-manager-pro)](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/YonasValentinMougaardKristensen.git-branch-manager-pro)](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro)
+[![Version](https://vsmarketplacebadges.dev/version/YonasValentinMougaardKristensen.git-branch-manager-pro.svg)](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro)
+[![Installs](https://vsmarketplacebadges.dev/installs/YonasValentinMougaardKristensen.git-branch-manager-pro.svg)](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro)
+[![Rating](https://vsmarketplacebadges.dev/rating/YonasValentinMougaardKristensen.git-branch-manager-pro.svg)](https://marketplace.visualstudio.com/items?itemName=YonasValentinMougaardKristensen.git-branch-manager-pro)
 [![Sponsor](https://img.shields.io/github/sponsors/YonasValentin?label=Sponsor&logo=github)](https://github.com/sponsors/YonasValentin)
 
 > **Love this extension?** [Become a sponsor](https://github.com/sponsors/YonasValentin) to support ongoing development and new features.

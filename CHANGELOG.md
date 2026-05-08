@@ -2,6 +2,11 @@
 
 All notable changes to the "Git Branch Manager" extension will be documented in this file.
 
+## [2.4.1] - 2026-05-09
+
+### Fixed
+- README badges. Shields.io retired the `visual-studio-marketplace/{v,i,r}` endpoints; the version, installs, and rating badges on the Marketplace listing were rendering as grey "retired badge" placeholders. Switched to `vsmarketplacebadges.dev`, which serves the live data.
+
 ## [2.4.0] - 2026-05-09
 
 ### Added
